@@ -663,6 +663,18 @@ if filtered_components:
         count = component_data[name]["count"]
         layer = component_data[name]["layer"]
         
+        # Calculate size per unit
+        if count > 0:
+            size_per_unit = size_bytes / count
+            if size_per_unit < 1024:
+                size_per_unit_display = f"{size_per_unit:.0f} B"
+            elif size_per_unit < 1024 * 1024:
+                size_per_unit_display = f"{size_per_unit/1024:.1f} KB"
+            else:
+                size_per_unit_display = f"{size_per_unit/(1024*1024):.2f} MB"
+        else:
+            size_per_unit_display = "—"
+        
         # Add layer emoji for visual distinction
         layer_icon = "🔵" if layer == "EL" else "🟠"
         component_display = f"{layer_icon} {name}"
@@ -670,8 +682,9 @@ if filtered_components:
         breakdown_data.append({
             "Component": component_display,
             "Count": count,
-            "Bytes": f"{size_bytes:,}",
-            "MiB": f"{size_mib:.3f}",
+            "Size/Unit": size_per_unit_display,
+            "Total Bytes": f"{size_bytes:,}",
+            "Total MiB": f"{size_mib:.3f}",
             "Percentage": f"{percentage:.1f}%"
         })
     
@@ -679,8 +692,9 @@ if filtered_components:
     breakdown_data.append({
         "Component": "**TOTAL**",
         "Count": "—",
-        "Bytes": f"{total_bytes:,}",
-        "MiB": f"{bytes_to_mib(total_bytes):.3f}",
+        "Size/Unit": "—",
+        "Total Bytes": f"{total_bytes:,}",
+        "Total MiB": f"{bytes_to_mib(total_bytes):.3f}",
         "Percentage": "100.0%"
     })
     
