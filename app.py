@@ -585,7 +585,7 @@ if calculation_notes:
     st.dataframe(notes_df, use_container_width=True, hide_index=True)
 
 # Display current calculations
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     consensus_mib = bytes_to_mib(consensus_size)
@@ -604,6 +604,14 @@ with col2:
         "Execution Layer", 
         f"{bytes_to_mib(execution_size):.2f} MiB",
         help="Size of execution layer block"
+    )
+
+with col3:
+    total_mib = bytes_to_mib(total_size)
+    st.metric(
+        "Total Block Size",
+        f"{total_mib:.2f} MiB",
+        help="Combined consensus + execution layer block size"
     )
 
 # Component breakdown
