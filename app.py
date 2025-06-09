@@ -297,7 +297,7 @@ st.title("🔗 Ethereum Electra Block Size Calculator")
 st.caption("Calculate theoretical worst-case block sizes with post-Electra features")
 
 # Sidebar for parameters
-st.sidebar.header("Network Parameters")
+st.sidebar.header("⚙️ Network Parameters")
 
 # Preset selector
 preset_options = ["Custom"] + list(NETWORK_PRESETS.keys())
