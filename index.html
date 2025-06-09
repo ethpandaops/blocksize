@@ -34,7 +34,7 @@ ETHEREUM_ENTITIES = {
     "Deposit": {"max_per_block": 16, "ssz_size": 1240},
     "VoluntaryExit": {"max_per_block": 16, "ssz_size": 112},
     "BLSToExecutionChange": {"max_per_block": 16, "ssz_size": 172},
-    "BlobKZGCommitment": {"max_per_block": 6, "ssz_size": 48},
+    "BlobKZGCommitment": {"max_per_block": 9, "ssz_size": 48},
     "DepositRequest": {"max_per_block": 8192, "ssz_size": 192},
     "WithdrawalRequest": {"max_per_block": 16, "ssz_size": 76},
     "ConsolidationRequest": {"max_per_block": 2, "ssz_size": 116}
@@ -45,18 +45,39 @@ def calculate_committee_size(active_validators):
     """Calculate committee size based on active validators: validators / 32 / 64"""
     return active_validators // 32 // 64
 
-def calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage=10):
-    """Calculate realistic number of deposit requests based on gas limit percentage"""
-    # Assume deposits use a percentage of total gas limit (default 10%)
-    # Each batch of 100 deposits costs ~3,150,000 gas
-    available_gas = gas_limit * (deposit_gas_percentage / 100)
-    batches = available_gas // 3_150_000
-    return min(int(batches * 100), ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"])
+def calculate_max_deposit_requests(gas_limit):
+    """Calculate maximum possible deposit requests based on gas limit"""
+    # Each individual deposit costs ~31,500 gas (3,150,000 gas per 100 deposits)
+    gas_per_deposit = 31_500
+    
+    # Calculate maximum individual deposits that fit in gas limit
+    max_deposits_by_gas = gas_limit // gas_per_deposit
+    
+    # Respect protocol limit
+    max_deposits_by_protocol = ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]
+    
+    return min(max_deposits_by_gas, max_deposits_by_protocol)
 
-def calculate_attester_slashing_size(num_slashings, committee_size):
+def calculate_remaining_execution_gas(gas_limit, deposit_requests):
+    """Calculate remaining gas for execution payload after accounting for deposit requests"""
+    if deposit_requests == 0:
+        return gas_limit
+    
+    # Each individual deposit costs ~31,500 gas
+    gas_per_deposit = 31_500
+    
+    # Calculate actual gas consumed by deposits
+    gas_consumed_by_deposits = deposit_requests * gas_per_deposit
+    
+    # Remaining gas for execution payload
+    remaining_gas = gas_limit - gas_consumed_by_deposits
+    
+    return max(0, remaining_gas)  # Ensure non-negative
+
+def calculate_attester_slashing_size(num_slashings, active_validators):
     """
-    Calculate size of attester slashings using theoretical worst-case
-    Both attestations have maximum possible validators
+    Calculate size of attester slashings based on slot-scoped validator count
+    Each attestation in a slashing can only include validators from its slot
     """
     if num_slashings == 0:
         return 0
@@ -65,20 +86,21 @@ def calculate_attester_slashing_size(num_slashings, committee_size):
     attestation_overhead = ETHEREUM_ENTITIES["AttesterSlashing"]["attestation_overhead"]
     per_index = ETHEREUM_ENTITIES["AttesterSlashing"]["per_index"]
     
-    # Theoretical worst-case: both attestations have maximum possible validators
-    MAX_VALIDATORS_PER_COMMITTEE = 2048
-    MAX_COMMITTEES_PER_SLOT = 64
-    max_indices = MAX_VALIDATORS_PER_COMMITTEE * MAX_COMMITTEES_PER_SLOT  # 131,072 total
+    # Validators per slot: total validators / 32 slots per epoch
+    validators_per_slot = active_validators // 32
+    
+    # Worst-case: both conflicting attestations include all validators from their respective slots
+    # Each slashing has two conflicting attestations, each with max validators for that slot
     size_per_slashing = (base_size + 
-                       2 * (attestation_overhead + max_indices * per_index))
+                       2 * (attestation_overhead + validators_per_slot * per_index))
     
     return num_slashings * size_per_slashing
 
-def calculate_attestation_size(num_attestations, committee_size):
+def calculate_attestation_size(num_attestations, active_validators):
     """
     Calculate size of Electra attestations with EIP-7549 cross-committee aggregation
-    Post-Electra: attestations can aggregate across multiple committees (up to 64)
-    Using theoretical maximum aggregation
+    Post-Electra: attestations can aggregate across all committees in a slot
+    Each slot has 1/32 of the total validator set
     """
     if num_attestations == 0:
         return 0
@@ -86,14 +108,14 @@ def calculate_attestation_size(num_attestations, committee_size):
     base_size = ETHEREUM_ENTITIES["Attestation"]["base_size"]
     per_index_bit = ETHEREUM_ENTITIES["Attestation"]["per_index_bit"]
     
-    # EIP-7549: Committee index moved outside, enabling cross-committee aggregation
-    # Theoretical: maximum possible aggregation
-    MAX_VALIDATORS_PER_COMMITTEE = 2048
-    MAX_COMMITTEES_PER_SLOT = 64
-    indices_per_attestation = MAX_VALIDATORS_PER_COMMITTEE * MAX_COMMITTEES_PER_SLOT
+    # Validators per slot: total validators / 32 slots per epoch
+    validators_per_slot = active_validators // 32
     
-    # Size per attestation: base + (indices / 8) for bitfield
-    size_per_attestation = base_size + (indices_per_attestation * per_index_bit)
+    # EIP-7549: Committee index moved outside, enabling cross-committee aggregation
+    # Worst-case: each attestation aggregates all validators assigned to that slot
+    
+    # Size per attestation: base + bitfield for validators in the slot
+    size_per_attestation = base_size + (validators_per_slot * per_index_bit)
     
     return num_attestations * size_per_attestation
 
@@ -102,13 +124,11 @@ def calculate_consensus_block_size(active_validators, gas_limit,
                                  attestations=8, voluntary_exits=0,
                                  bls_to_execution_changes=0, blob_kzg_commitments=0,
                                  deposit_requests=0, withdrawal_requests=0, 
-                                 consolidation_requests=0,
-                                 auto_deposit_requests=False, deposit_gas_percentage=10):
+                                 consolidation_requests=0):
     """
     Calculate consensus layer block size in bytes using theoretical worst-case
     Based on detailed Ethereum consensus layer specifications
     """
-    committee_size = calculate_committee_size(active_validators)
     total_size = 0
     
     # Fixed components
@@ -120,34 +140,31 @@ def calculate_consensus_block_size(active_validators, gas_limit,
     
     total_size += calculate_attester_slashing_size(
         min(attester_slashings, ETHEREUM_ENTITIES["AttesterSlashing"]["max_per_block"]), 
-        committee_size
+        active_validators
     )
     
     total_size += calculate_attestation_size(
         min(attestations, ETHEREUM_ENTITIES["Attestation"]["max_per_block"]), 
-        committee_size
+        active_validators
     )
     
     total_size += min(voluntary_exits, ETHEREUM_ENTITIES["VoluntaryExit"]["max_per_block"]) * ETHEREUM_ENTITIES["VoluntaryExit"]["ssz_size"]
     total_size += min(bls_to_execution_changes, ETHEREUM_ENTITIES["BLSToExecutionChange"]["max_per_block"]) * ETHEREUM_ENTITIES["BLSToExecutionChange"]["ssz_size"]
     total_size += min(blob_kzg_commitments, ETHEREUM_ENTITIES["BlobKZGCommitment"]["max_per_block"]) * ETHEREUM_ENTITIES["BlobKZGCommitment"]["ssz_size"]
     
-    # Post-Electra components - auto-calculate deposit requests if enabled
-    if auto_deposit_requests:
-        deposit_requests = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
-    
+    # Post-Electra components
     total_size += min(deposit_requests, ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["DepositRequest"]["ssz_size"]
     total_size += min(withdrawal_requests, ETHEREUM_ENTITIES["WithdrawalRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["WithdrawalRequest"]["ssz_size"]
     total_size += min(consolidation_requests, ETHEREUM_ENTITIES["ConsolidationRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["ConsolidationRequest"]["ssz_size"]
     
     return total_size
 
-def calculate_execution_block_size(gas_limit, transaction_type="mixed", compressed=False, eip_7623=True):
+def calculate_execution_block_size(available_gas, transaction_type="mixed", compressed=False, eip_7623=True):
     """
     Calculate execution layer block size in bytes based on EIP-7623 and compression
     
     Args:
-        gas_limit: Gas limit in gas units
+        available_gas: Available gas for execution payload (after deposits)
         transaction_type: "all_zeros", "all_nonzeros", "mixed", "al_mixed" (access list + mixed)
         compressed: Whether to apply Snappy compression
         eip_7623: Whether EIP-7623 is active (default True for post-Dencun)
@@ -170,8 +187,8 @@ def calculate_execution_block_size(gas_limit, transaction_type="mixed", compress
             "al_mixed": 1.63 / 30_000_000        # 1.63 MiB per 30M gas
         }
     
-    # Calculate base size in MiB
-    mib_size = gas_limit * conversion_rates[transaction_type]
+    # Calculate base size in MiB using available gas
+    mib_size = available_gas * conversion_rates[transaction_type]
     
     if compressed:
         # Apply Snappy compression ratios from the table
@@ -190,13 +207,12 @@ def bytes_to_mib(bytes_val):
     """Convert bytes to MiB"""
     return bytes_val / (1024 * 1024)
 
-def generate_calculation_notes(active_validators, gas_limit, proposer_slashings, attester_slashings, 
+def generate_calculation_notes(active_validators, gas_limit, remaining_execution_gas, proposer_slashings, attester_slashings, 
                              attestations, voluntary_exits, bls_to_execution_changes, blob_count,
                              deposit_requests, withdrawal_requests, consolidation_requests,
-                             auto_deposit_requests, deposit_gas_percentage, eip_7623_active, compressed):
+                             transaction_type, eip_7623_active, compressed):
     """Generate calculation assumption notes for all components"""
     notes = []
-    committee_size = calculate_committee_size(active_validators)
     
     # Fixed components
     notes.append({
@@ -207,27 +223,20 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     
     # Attestations (Electra EIP-7549)
     if attestations > 0:
-        max_indices = 2048 * 64  # Max validators × max committees  
+        validators_per_slot = active_validators // 32
         notes.append({
             "Component": "Attestations", 
-            "Assumption": "Maximum Electra aggregation",
-            "Details": f"{attestations} attestations × {max_indices:,} max validators (64 committees × 2,048 each)"
+            "Assumption": "Maximum Electra aggregation per slot",
+            "Details": f"{attestations} attestations × {validators_per_slot:,} validators ({active_validators:,}/32 per slot)"
         })
     
-    # Auto-calculated deposit requests
-    if auto_deposit_requests:
-        calc_deposits = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
-        available_gas = gas_limit * (deposit_gas_percentage / 100)
+    # Deposit requests (when enabled)
+    if deposit_requests > 0:
+        gas_used_by_deposits = gas_limit - remaining_execution_gas
         notes.append({
             "Component": "Deposit Requests", 
-            "Assumption": "Gas allocation-based calculation",
-            "Details": f"{deposit_gas_percentage}% of {gas_limit:,} gas = {available_gas:,.0f} gas → {calc_deposits} deposits"
-        })
-    elif deposit_requests > 0:
-        notes.append({
-            "Component": "Deposit Requests", 
-            "Assumption": "Manual override",
-            "Details": f"{deposit_requests} deposits (user-specified)"
+            "Assumption": "Reduces execution gas allocation",
+            "Details": f"{deposit_requests:,} deposits using {gas_used_by_deposits:,} gas"
         })
     
     # Proposer slashings
@@ -240,10 +249,11 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     
     # Attester slashings
     if attester_slashings > 0:
+        validators_per_slot = active_validators // 32
         notes.append({
             "Component": "Attester Slashings", 
-            "Assumption": "Theoretical maximum",
-            "Details": f"{attester_slashings} slashings with 131,072 validators each side"
+            "Assumption": "Worst-case per slot",
+            "Details": f"{attester_slashings} slashings with {validators_per_slot:,} validators each side ({active_validators:,}/32 per slot)"
         })
     
     # Other consensus operations
@@ -282,11 +292,17 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
             "Details": f"{consolidation_requests} requests × 116 bytes each"
         })
     
-    # Execution layer (worst-case)
+    # Execution layer
+    transaction_type_names = {
+        "all_zeros": "all zeros",
+        "all_nonzeros": "all non-zeros", 
+        "mixed": "mixed (29% zeros)",
+        "al_mixed": "access list + mixed"
+    }
     notes.append({
         "Component": "Execution Layer", 
-        "Assumption": f"EIP-7623 {'active' if eip_7623_active else 'inactive'}, all_zeros transactions",
-        "Details": f"Gas-to-size conversion, worst-case scenario{', Snappy compressed' if compressed else ''}"
+        "Assumption": f"EIP-7623 {'active' if eip_7623_active else 'inactive'}, {transaction_type_names[transaction_type]} transactions",
+        "Details": f"{remaining_execution_gas:,} gas available for execution{', Snappy compressed' if compressed else ''}"
     })
     
     return notes
@@ -302,10 +318,26 @@ NETWORK_PRESETS = {
         "voluntary_exits": 2,
         "bls_to_execution_changes": 8,
         "blob_count": 9,
-        "deposit_requests": 0,
+        "deposit_requests": 0,  # Realistic: no mass deposits
         "withdrawal_requests": 8,
         "consolidation_requests": 0,
-        "auto_deposit_requests": False,
+        "transaction_type": "mixed",
+        "eip_7623_active": True,
+        "compressed": False
+    },
+    "worst case (36M)": {
+        "active_validators": 1_100_000,
+        "gas_limit": 36_000_000,
+        "proposer_slashings": 16,
+        "attester_slashings": 2,
+        "attestations": 8,
+        "voluntary_exits": 16,
+        "bls_to_execution_changes": 16,
+        "blob_count": 9,
+        "deposit_requests": 0,  # Worst case might be no deposits, max execution
+        "withdrawal_requests": 16,
+        "consolidation_requests": 2,
+        "transaction_type": "all_zeros",
         "eip_7623_active": True,
         "compressed": False
     }
@@ -314,11 +346,10 @@ NETWORK_PRESETS = {
 # Streamlit App
 st.set_page_config(page_title="Ethereum Block Size Calculator", layout="wide")
 
-st.title("🔗 Ethereum Electra Block Size Calculator")
-st.caption("Calculate theoretical worst-case block sizes with post-Electra features")
+st.title("🔗 Ethereum Block Size Calculator")
 
 # Sidebar for parameters
-st.sidebar.header("Network Parameters")
+st.sidebar.header("⚙️ Network Parameters")
 
 # Preset selector
 preset_options = ["Custom"] + list(NETWORK_PRESETS.keys())
@@ -343,7 +374,7 @@ if selected_preset != "Custom":
     default_deposit_requests = preset["deposit_requests"]
     default_withdrawal_requests = preset["withdrawal_requests"]
     default_consolidation_requests = preset["consolidation_requests"]
-    default_auto_deposit = preset["auto_deposit_requests"]
+    default_transaction_type = preset["transaction_type"]
     default_eip_7623 = preset["eip_7623_active"]
     default_compressed = preset["compressed"]
 else:
@@ -359,7 +390,7 @@ else:
     default_deposit_requests = 0
     default_withdrawal_requests = 8
     default_consolidation_requests = 0
-    default_auto_deposit = True
+    default_transaction_type = "all_zeros"
     default_eip_7623 = True
     default_compressed = False
 
@@ -437,23 +468,42 @@ bls_to_execution_changes = st.sidebar.slider(
 blob_count = st.sidebar.slider(
     "Blob Count",
     min_value=0,
-    max_value=128,
+    max_value=ETHEREUM_ENTITIES["BlobKZGCommitment"]["max_per_block"],
     value=default_blob_count,
-    help="Number of blobs (max 128 per block)"
+    help=f"Number of blobs (max {ETHEREUM_ENTITIES['BlobKZGCommitment']['max_per_block']} per block in Electra)"
 )
 blob_kzg_commitments = blob_count  # Each blob has one KZG commitment
 
 st.sidebar.subheader("Post-Electra Operations")
 
+# Calculate dynamic max for deposit requests
+max_possible_deposits = calculate_max_deposit_requests(gas_limit)
+
 # Post-Electra operations
 deposit_requests = st.sidebar.slider(
     "Deposit Requests",
     min_value=0,
-    max_value=ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"],
-    value=default_deposit_requests,
-    step=100,
-    help=f"Max {ETHEREUM_ENTITIES['DepositRequest']['max_per_block']} per block - new deposit system"
+    max_value=max_possible_deposits,
+    value=min(default_deposit_requests, max_possible_deposits),  # Ensure default doesn't exceed max
+    step=10,
+    help=f"Max {max_possible_deposits:,} with {gas_limit_millions}M gas (protocol limit: {ETHEREUM_ENTITIES['DepositRequest']['max_per_block']:,})"
 )
+
+# Calculate remaining gas for execution payload
+remaining_execution_gas = calculate_remaining_execution_gas(gas_limit, deposit_requests)
+
+# Show constraint information
+protocol_limit = ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]
+if max_possible_deposits < protocol_limit:
+    st.sidebar.warning(f"⚠️ Gas limit constrains deposits to {max_possible_deposits:,} (protocol allows {protocol_limit:,})")
+
+# Show gas allocation
+if deposit_requests > 0:
+    gas_used_by_deposits = gas_limit - remaining_execution_gas
+    st.sidebar.info(f"📊 {deposit_requests:,} deposits using {gas_used_by_deposits:,} gas")
+    st.sidebar.info(f"⛽ {remaining_execution_gas:,} gas remaining for execution")
+else:
+    st.sidebar.info(f"⛽ {gas_limit:,} gas available for execution")
 
 withdrawal_requests = st.sidebar.slider(
     "Withdrawal Requests",
@@ -473,25 +523,21 @@ consolidation_requests = st.sidebar.slider(
 
 st.sidebar.subheader("Execution Layer Settings")
 
-auto_deposit_requests = st.sidebar.checkbox(
-    "Auto-calculate Deposit Requests",
-    value=default_auto_deposit,
-    help="Calculate deposit requests based on percentage of gas limit allocated to deposits"
+# Transaction type selection
+transaction_types = {
+    "all_zeros": "All Zeros (Worst Case)",
+    "all_nonzeros": "All Non-zeros", 
+    "mixed": "Mixed (29% zeros, 71% non-zeros)",
+    "al_mixed": "Access List + Mixed"
+}
+
+transaction_type = st.sidebar.selectbox(
+    "Transaction Type",
+    options=list(transaction_types.keys()),
+    format_func=lambda x: transaction_types[x],
+    index=list(transaction_types.keys()).index(default_transaction_type),
+    help="Type of transaction data filling the block - affects compression and size"
 )
-
-if auto_deposit_requests:
-    deposit_gas_percentage = st.sidebar.slider(
-        "Deposit Gas Allocation (%)",
-        min_value=1,
-        max_value=100,
-        value=10,
-        help="Percentage of block gas limit allocated to deposit requests (100% = theoretical maximum)"
-    )
-else:
-    deposit_gas_percentage = 10  # Default for calculation notes
-
-# Transaction type for worst-case scenarios
-transaction_type = "all_zeros"  # Worst case: maximum block size
 
 eip_7623_active = st.sidebar.checkbox(
     "EIP-7623 Active",
@@ -522,13 +568,11 @@ consensus_size = calculate_consensus_block_size(
     blob_kzg_commitments=blob_kzg_commitments,
     deposit_requests=deposit_requests,
     withdrawal_requests=withdrawal_requests,
-    consolidation_requests=consolidation_requests,
-    auto_deposit_requests=auto_deposit_requests,
-    deposit_gas_percentage=deposit_gas_percentage
+    consolidation_requests=consolidation_requests
 )
 
 execution_size = calculate_execution_block_size(
-    gas_limit=gas_limit,
+    available_gas=remaining_execution_gas,
     transaction_type=transaction_type,
     compressed=compressed,
     eip_7623=eip_7623_active
@@ -538,10 +582,10 @@ total_size = consensus_size + execution_size
 
 # Generate calculation notes
 calculation_notes = generate_calculation_notes(
-    active_validators, gas_limit, proposer_slashings, attester_slashings,
+    active_validators, gas_limit, remaining_execution_gas, proposer_slashings, attester_slashings,
     attestations, voluntary_exits, bls_to_execution_changes, blob_count,
     deposit_requests, withdrawal_requests, consolidation_requests,
-    auto_deposit_requests, deposit_gas_percentage, eip_7623_active, compressed
+    transaction_type, eip_7623_active, compressed
 )
 
 # Display calculation assumptions
@@ -550,7 +594,7 @@ if calculation_notes:
     st.dataframe(notes_df, use_container_width=True, hide_index=True)
 
 # Display current calculations
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     consensus_mib = bytes_to_mib(consensus_size)
@@ -571,20 +615,23 @@ with col2:
         help="Size of execution layer block"
     )
 
+with col3:
+    total_mib = bytes_to_mib(total_size)
+    st.metric(
+        "Total Block Size",
+        f"{total_mib:.2f} MiB",
+        help="Combined consensus + execution layer block size"
+    )
+
 # Component breakdown
 
-# Calculate all component sizes (same as above but organized differently)
-breakdown_committee_size = calculate_committee_size(active_validators)
-
-# Handle auto-calculated deposit requests
+# Use calculated deposit requests
 breakdown_deposit_requests = deposit_requests
-if auto_deposit_requests:
-    breakdown_deposit_requests = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
 
 # Calculate all component sizes and counts
 component_data = {
     "Execution Layer": {"size": execution_size, "count": 1, "layer": "EL"},
-    "Attestations": {"size": calculate_attestation_size(attestations, breakdown_committee_size), "count": attestations, "layer": "CL"},
+    "Attestations": {"size": calculate_attestation_size(attestations, active_validators), "count": attestations, "layer": "CL"},
     "Deposit Requests": {"size": breakdown_deposit_requests * ETHEREUM_ENTITIES["DepositRequest"]["ssz_size"], "count": breakdown_deposit_requests, "layer": "CL"},
     "BeaconBlock": {"size": ETHEREUM_ENTITIES["BeaconBlock"]["ssz_size"], "count": 1, "layer": "CL"},
     "BeaconBlockBody": {"size": ETHEREUM_ENTITIES["BeaconBlockBody"]["ssz_size"], "count": 1, "layer": "CL"},
@@ -593,7 +640,7 @@ component_data = {
     "Voluntary Exits": {"size": voluntary_exits * ETHEREUM_ENTITIES["VoluntaryExit"]["ssz_size"], "count": voluntary_exits, "layer": "CL"},
     f"Blob Commitments": {"size": blob_kzg_commitments * ETHEREUM_ENTITIES["BlobKZGCommitment"]["ssz_size"], "count": blob_kzg_commitments, "layer": "CL"},
     "Proposer Slashings": {"size": proposer_slashings * ETHEREUM_ENTITIES["ProposerSlashing"]["ssz_size"], "count": proposer_slashings, "layer": "CL"},
-    "Attester Slashings": {"size": calculate_attester_slashing_size(attester_slashings, breakdown_committee_size), "count": attester_slashings, "layer": "CL"},
+    "Attester Slashings": {"size": calculate_attester_slashing_size(attester_slashings, active_validators), "count": attester_slashings, "layer": "CL"},
     "Consolidation Requests": {"size": consolidation_requests * ETHEREUM_ENTITIES["ConsolidationRequest"]["ssz_size"], "count": consolidation_requests, "layer": "CL"},
 }
 
@@ -640,6 +687,18 @@ if filtered_components:
         count = component_data[name]["count"]
         layer = component_data[name]["layer"]
         
+        # Calculate size per unit
+        if count > 0:
+            size_per_unit = size_bytes / count
+            if size_per_unit < 1024:
+                size_per_unit_display = f"{size_per_unit:.0f} B"
+            elif size_per_unit < 1024 * 1024:
+                size_per_unit_display = f"{size_per_unit/1024:.1f} KB"
+            else:
+                size_per_unit_display = f"{size_per_unit/(1024*1024):.2f} MB"
+        else:
+            size_per_unit_display = "—"
+        
         # Add layer emoji for visual distinction
         layer_icon = "🔵" if layer == "EL" else "🟠"
         component_display = f"{layer_icon} {name}"
@@ -647,8 +706,9 @@ if filtered_components:
         breakdown_data.append({
             "Component": component_display,
             "Count": count,
-            "Bytes": f"{size_bytes:,}",
-            "MiB": f"{size_mib:.3f}",
+            "Size/Unit": size_per_unit_display,
+            "Total Bytes": f"{size_bytes:,}",
+            "Total MiB": f"{size_mib:.3f}",
             "Percentage": f"{percentage:.1f}%"
         })
     
@@ -656,8 +716,9 @@ if filtered_components:
     breakdown_data.append({
         "Component": "**TOTAL**",
         "Count": "—",
-        "Bytes": f"{total_bytes:,}",
-        "MiB": f"{bytes_to_mib(total_bytes):.3f}",
+        "Size/Unit": "—",
+        "Total Bytes": f"{total_bytes:,}",
+        "Total MiB": f"{bytes_to_mib(total_bytes):.3f}",
         "Percentage": "100.0%"
     })
     
