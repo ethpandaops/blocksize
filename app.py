@@ -294,6 +294,7 @@ NETWORK_PRESETS = {
 st.set_page_config(page_title="Ethereum Block Size Calculator", layout="wide")
 
 st.title("🔗 Ethereum Electra Block Size Calculator")
+st.caption("Calculate theoretical worst-case block sizes with post-Electra features")
 
 # Sidebar for parameters
 st.sidebar.header("Network Parameters")
