@@ -32,10 +32,10 @@ def calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage=10):
     batches = available_gas // 3_150_000
     return min(int(batches * 100), ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"])
 
-def calculate_attester_slashing_size(num_slashings, committee_size):
+def calculate_attester_slashing_size(num_slashings, active_validators):
     """
-    Calculate size of attester slashings using theoretical worst-case
-    Both attestations have maximum possible validators
+    Calculate size of attester slashings based on actual validator set size
+    Both attestations can include all active validators in worst case
     """
     if num_slashings == 0:
         return 0
@@ -44,20 +44,18 @@ def calculate_attester_slashing_size(num_slashings, committee_size):
     attestation_overhead = ETHEREUM_ENTITIES["AttesterSlashing"]["attestation_overhead"]
     per_index = ETHEREUM_ENTITIES["AttesterSlashing"]["per_index"]
     
-    # Theoretical worst-case: both attestations have maximum possible validators
-    MAX_VALIDATORS_PER_COMMITTEE = 2048
-    MAX_COMMITTEES_PER_SLOT = 64
-    max_indices = MAX_VALIDATORS_PER_COMMITTEE * MAX_COMMITTEES_PER_SLOT  # 131,072 total
+    # Worst-case: both attestations include all active validators
+    # Each slashing has two conflicting attestations, each can have all validators
     size_per_slashing = (base_size + 
-                       2 * (attestation_overhead + max_indices * per_index))
+                       2 * (attestation_overhead + active_validators * per_index))
     
     return num_slashings * size_per_slashing
 
-def calculate_attestation_size(num_attestations, committee_size):
+def calculate_attestation_size(num_attestations, active_validators):
     """
     Calculate size of Electra attestations with EIP-7549 cross-committee aggregation
-    Post-Electra: attestations can aggregate across multiple committees (up to 64)
-    Using theoretical maximum aggregation
+    Post-Electra: attestations can aggregate across all committees in a slot
+    Size scales with actual validator set size
     """
     if num_attestations == 0:
         return 0
@@ -66,13 +64,11 @@ def calculate_attestation_size(num_attestations, committee_size):
     per_index_bit = ETHEREUM_ENTITIES["Attestation"]["per_index_bit"]
     
     # EIP-7549: Committee index moved outside, enabling cross-committee aggregation
-    # Theoretical: maximum possible aggregation
-    MAX_VALIDATORS_PER_COMMITTEE = 2048
-    MAX_COMMITTEES_PER_SLOT = 64
-    indices_per_attestation = MAX_VALIDATORS_PER_COMMITTEE * MAX_COMMITTEES_PER_SLOT
+    # Worst-case: each attestation aggregates across all active validators
+    # (all validators could theoretically participate in one aggregated attestation)
     
-    # Size per attestation: base + (indices / 8) for bitfield
-    size_per_attestation = base_size + (indices_per_attestation * per_index_bit)
+    # Size per attestation: base + bitfield for all validators
+    size_per_attestation = base_size + (active_validators * per_index_bit)
     
     return num_attestations * size_per_attestation
 
@@ -87,7 +83,6 @@ def calculate_consensus_block_size(active_validators, gas_limit,
     Calculate consensus layer block size in bytes using theoretical worst-case
     Based on detailed Ethereum consensus layer specifications
     """
-    committee_size = calculate_committee_size(active_validators)
     total_size = 0
     
     # Fixed components
@@ -99,12 +94,12 @@ def calculate_consensus_block_size(active_validators, gas_limit,
     
     total_size += calculate_attester_slashing_size(
         min(attester_slashings, ETHEREUM_ENTITIES["AttesterSlashing"]["max_per_block"]), 
-        committee_size
+        active_validators
     )
     
     total_size += calculate_attestation_size(
         min(attestations, ETHEREUM_ENTITIES["Attestation"]["max_per_block"]), 
-        committee_size
+        active_validators
     )
     
     total_size += min(voluntary_exits, ETHEREUM_ENTITIES["VoluntaryExit"]["max_per_block"]) * ETHEREUM_ENTITIES["VoluntaryExit"]["ssz_size"]
@@ -175,7 +170,6 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
                              auto_deposit_requests, deposit_gas_percentage, transaction_type, eip_7623_active, compressed):
     """Generate calculation assumption notes for all components"""
     notes = []
-    committee_size = calculate_committee_size(active_validators)
     
     # Fixed components
     notes.append({
@@ -186,11 +180,10 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     
     # Attestations (Electra EIP-7549)
     if attestations > 0:
-        max_indices = 2048 * 64  # Max validators × max committees  
         notes.append({
             "Component": "Attestations", 
             "Assumption": "Maximum Electra aggregation",
-            "Details": f"{attestations} attestations × {max_indices:,} max validators (64 committees × 2,048 each)"
+            "Details": f"{attestations} attestations × {active_validators:,} validators (all active validators)"
         })
     
     # Auto-calculated deposit requests
@@ -221,8 +214,8 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     if attester_slashings > 0:
         notes.append({
             "Component": "Attester Slashings", 
-            "Assumption": "Theoretical maximum",
-            "Details": f"{attester_slashings} slashings with 131,072 validators each side"
+            "Assumption": "Worst-case validator set",
+            "Details": f"{attester_slashings} slashings with {active_validators:,} validators each side"
         })
     
     # Other consensus operations
@@ -616,9 +609,6 @@ with col3:
 
 # Component breakdown
 
-# Calculate all component sizes (same as above but organized differently)
-breakdown_committee_size = calculate_committee_size(active_validators)
-
 # Handle auto-calculated deposit requests
 breakdown_deposit_requests = deposit_requests
 if auto_deposit_requests:
@@ -627,7 +617,7 @@ if auto_deposit_requests:
 # Calculate all component sizes and counts
 component_data = {
     "Execution Layer": {"size": execution_size, "count": 1, "layer": "EL"},
-    "Attestations": {"size": calculate_attestation_size(attestations, breakdown_committee_size), "count": attestations, "layer": "CL"},
+    "Attestations": {"size": calculate_attestation_size(attestations, active_validators), "count": attestations, "layer": "CL"},
     "Deposit Requests": {"size": breakdown_deposit_requests * ETHEREUM_ENTITIES["DepositRequest"]["ssz_size"], "count": breakdown_deposit_requests, "layer": "CL"},
     "BeaconBlock": {"size": ETHEREUM_ENTITIES["BeaconBlock"]["ssz_size"], "count": 1, "layer": "CL"},
     "BeaconBlockBody": {"size": ETHEREUM_ENTITIES["BeaconBlockBody"]["ssz_size"], "count": 1, "layer": "CL"},
@@ -636,7 +626,7 @@ component_data = {
     "Voluntary Exits": {"size": voluntary_exits * ETHEREUM_ENTITIES["VoluntaryExit"]["ssz_size"], "count": voluntary_exits, "layer": "CL"},
     f"Blob Commitments": {"size": blob_kzg_commitments * ETHEREUM_ENTITIES["BlobKZGCommitment"]["ssz_size"], "count": blob_kzg_commitments, "layer": "CL"},
     "Proposer Slashings": {"size": proposer_slashings * ETHEREUM_ENTITIES["ProposerSlashing"]["ssz_size"], "count": proposer_slashings, "layer": "CL"},
-    "Attester Slashings": {"size": calculate_attester_slashing_size(attester_slashings, breakdown_committee_size), "count": attester_slashings, "layer": "CL"},
+    "Attester Slashings": {"size": calculate_attester_slashing_size(attester_slashings, active_validators), "count": attester_slashings, "layer": "CL"},
     "Consolidation Requests": {"size": consolidation_requests * ETHEREUM_ENTITIES["ConsolidationRequest"]["ssz_size"], "count": consolidation_requests, "layer": "CL"},
 }
 
