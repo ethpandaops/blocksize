@@ -1,73 +1,113 @@
 # Ethereum Block Size Calculator
 
-A Streamlit application for parameterizing and visualizing Ethereum block sizes at different gas limits and validator counts.
+A comprehensive tool for calculating and visualizing Ethereum block sizes across different network configurations, including support for the Electra upgrade features.
+
+## 🌐 Live Demo
+
+**Try it online**: https://ethpandaops.github.io/blocksize/
+
+The app runs entirely in your browser using [stlite](https://github.com/whitphx/stlite) - no server required!
 
 ## Features
 
-- **Interactive Parameter Controls**: Adjust validators, gas limits, attestations, deposits, and slashings
-- **Real-time Calculations**: Live updates of committee size and block sizes
-- **Multiple Visualizations**: Charts showing relationships between parameters and block sizes
-- **Scenario Comparison**: Compare predefined scaling scenarios
-- **Block Composition Analysis**: Breakdown of what contributes to block size
+- **Consensus Layer Calculations**: BeaconBlock, attestations, slashings, exits, BLS changes
+- **Post-Electra Support**: Deposit requests, withdrawal requests, consolidation requests  
+- **Execution Layer Modeling**: EIP-7623 effects, compression scenarios, gas limit variations
+- **Interactive Visualizations**: Component breakdowns, size comparisons, parameter exploration
+- **Preset Configurations**: Common network scenarios (mainnet, testnet configurations)
+- **Theoretical Worst-Case Analysis**: Maximum possible block sizes under extreme conditions
 
-## Quick Start with uv
+## Installation
 
-### Option 1: One-Command Start
 ```bash
-./run.sh
-```
+# Clone the repository
+git clone https://github.com/ethpandaops/blocksizes.git
+cd blocksizes
 
-### Option 2: Manual Setup  
-```bash
-# Install dependencies
+# Install dependencies using uv (recommended)
 uv sync
 
-# Run the app
-uv run streamlit run app.py
+# Or using pip
+pip install -r requirements.txt
 ```
-
-### Option 3: Install uv first (if needed)
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies and run
-uv sync
-uv run streamlit run app.py
-```
-
-The app will open in your browser at `http://localhost:8501`
 
 ## Usage
 
-1. **Adjust Parameters**: Use the sidebar sliders to modify:
-   - Active validator count (100K - 2M)
-   - Gas limit (15M - 300M)
-   - Network activity (attestations, deposits, slashings)
-   - Transaction density type
+### Local Development
+```bash
+# Run the Streamlit app locally
+streamlit run app.py
 
-2. **View Results**: The main dashboard shows:
-   - Current committee size and block sizes
-   - Interactive charts showing parameter relationships
-   - Scenario comparisons with predefined configurations
+# Or using the run script
+./run.sh
+```
 
-3. **Explore Visualizations**: Three tabs provide different views:
-   - **Gas Limit Impact**: How gas limits affect block sizes
-   - **Validator Count Impact**: How validator count scales block sizes
-   - **Scenario Comparison**: Compare realistic network scenarios
+The app will be available at `http://localhost:8501`
 
-## Block Size Model
+### Deployment
 
-The calculator models both consensus and execution layer block sizes:
+The app is automatically deployed to GitHub Pages using stlite. To update the deployment:
 
-- **Consensus Layer**: Based on validator count, attestations, deposits, and slashings
-- **Execution Layer**: Based on gas limit and transaction density
-- **Committee Size**: Calculated as `validators / 32 / 64`
+```bash
+# Rebuild and deploy after making changes to app.py
+./deploy.sh
+```
 
-## Scenarios
+Or manually:
+```bash
+# Just rebuild index.html from app.py
+./build.sh
 
-Predefined scenarios include:
-- **Current Mainnet**: ~1M validators, 30M gas limit
-- **High Activity**: 1.5M validators, 60M gas limit with high activity
-- **Future Scale**: 2M validators, 150M gas limit
-- **Extreme Scale**: 2M validators, 300M gas limit with maximum activity
+# Then commit and push
+git add index.html
+git commit -m "Update deployment"
+git push
+```
+
+## Configuration
+
+The calculator includes several preset network configurations and supports custom parameter adjustment for:
+
+- Active validator counts (100k - 5M)
+- Gas limits (15M - 1000M = 1 gigagas)
+- All consensus layer operations with realistic limits
+- EIP-7623 effects and compression scenarios
+
+## Technical Details
+
+### Consensus Layer Components
+- **BeaconBlock/Body**: Fixed SSZ overhead (500 bytes)
+- **Attestations**: EIP-7549 cross-committee aggregation support
+- **Slashings**: Theoretical worst-case with maximum validator sets
+- **Post-Electra**: New deposit system, withdrawal & consolidation requests
+
+### Execution Layer Modeling
+- **EIP-7623**: Calldata cost increases and size reductions
+- **Transaction Types**: all_zeros, all_nonzeros, mixed, access_list scenarios
+- **Compression**: Snappy compression effects on different data patterns
+- **Gas Conversion**: Empirical gas-to-size conversion rates
+
+### Deployment Architecture
+- **Runtime**: [stlite](https://github.com/whitphx/stlite) (Streamlit in browser via Pyodide)
+- **Hosting**: GitHub Pages (static hosting)
+- **Build Process**: Dynamic `index.html` generation from `app.py`
+- **Dependencies**: Bundled client-side (numpy, pandas, plotly)
+
+## Development Scripts
+
+- `./build.sh` - Rebuild `index.html` from `app.py`
+- `./deploy.sh` - Build and deploy to GitHub Pages
+- `./run.sh` - Run local Streamlit development server
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes to `app.py`
+4. Test locally with `streamlit run app.py`
+5. Run `./deploy.sh` to update the live demo
+6. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
