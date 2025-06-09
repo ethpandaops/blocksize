@@ -55,7 +55,7 @@ def calculate_attestation_size(num_attestations, active_validators):
     """
     Calculate size of Electra attestations with EIP-7549 cross-committee aggregation
     Post-Electra: attestations can aggregate across all committees in a slot
-    Size scales with actual validator set size
+    Each slot has 1/32 of the total validator set
     """
     if num_attestations == 0:
         return 0
@@ -63,12 +63,14 @@ def calculate_attestation_size(num_attestations, active_validators):
     base_size = ETHEREUM_ENTITIES["Attestation"]["base_size"]
     per_index_bit = ETHEREUM_ENTITIES["Attestation"]["per_index_bit"]
     
-    # EIP-7549: Committee index moved outside, enabling cross-committee aggregation
-    # Worst-case: each attestation aggregates across all active validators
-    # (all validators could theoretically participate in one aggregated attestation)
+    # Validators per slot: total validators / 32 slots per epoch
+    validators_per_slot = active_validators // 32
     
-    # Size per attestation: base + bitfield for all validators
-    size_per_attestation = base_size + (active_validators * per_index_bit)
+    # EIP-7549: Committee index moved outside, enabling cross-committee aggregation
+    # Worst-case: each attestation aggregates all validators assigned to that slot
+    
+    # Size per attestation: base + bitfield for validators in the slot
+    size_per_attestation = base_size + (validators_per_slot * per_index_bit)
     
     return num_attestations * size_per_attestation
 
@@ -180,10 +182,11 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     
     # Attestations (Electra EIP-7549)
     if attestations > 0:
+        validators_per_slot = active_validators // 32
         notes.append({
             "Component": "Attestations", 
-            "Assumption": "Maximum Electra aggregation",
-            "Details": f"{attestations} attestations × {active_validators:,} validators (all active validators)"
+            "Assumption": "Maximum Electra aggregation per slot",
+            "Details": f"{attestations} attestations × {validators_per_slot:,} validators ({active_validators:,}/32 per slot)"
         })
     
     # Auto-calculated deposit requests
