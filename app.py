@@ -13,7 +13,7 @@ ETHEREUM_ENTITIES = {
     "Deposit": {"max_per_block": 16, "ssz_size": 1240},
     "VoluntaryExit": {"max_per_block": 16, "ssz_size": 112},
     "BLSToExecutionChange": {"max_per_block": 16, "ssz_size": 172},
-    "BlobKZGCommitment": {"max_per_block": 6, "ssz_size": 48},
+    "BlobKZGCommitment": {"max_per_block": 9, "ssz_size": 48},
     "DepositRequest": {"max_per_block": 8192, "ssz_size": 192},
     "WithdrawalRequest": {"max_per_block": 16, "ssz_size": 76},
     "ConsolidationRequest": {"max_per_block": 2, "ssz_size": 116}
@@ -303,7 +303,7 @@ NETWORK_PRESETS = {
         "attestations": 8,
         "voluntary_exits": 16,
         "bls_to_execution_changes": 16,
-        "blob_count": 6,
+        "blob_count": 9,
         "deposit_requests": 8192,
         "withdrawal_requests": 16,
         "consolidation_requests": 2,
@@ -320,7 +320,7 @@ NETWORK_PRESETS = {
         "attestations": 8,
         "voluntary_exits": 16,
         "bls_to_execution_changes": 16,
-        "blob_count": 6,
+        "blob_count": 9,
         "deposit_requests": 0,
         "withdrawal_requests": 16,
         "consolidation_requests": 2,
@@ -459,9 +459,9 @@ bls_to_execution_changes = st.sidebar.slider(
 blob_count = st.sidebar.slider(
     "Blob Count",
     min_value=0,
-    max_value=128,
+    max_value=ETHEREUM_ENTITIES["BlobKZGCommitment"]["max_per_block"],
     value=default_blob_count,
-    help="Number of blobs (max 128 per block)"
+    help=f"Number of blobs (max {ETHEREUM_ENTITIES['BlobKZGCommitment']['max_per_block']} per block in Electra)"
 )
 blob_kzg_commitments = blob_count  # Each blob has one KZG commitment
 
