@@ -307,23 +307,6 @@ NETWORK_PRESETS = {
         "transaction_type": "all_zeros",
         "eip_7623_active": True,
         "compressed": False
-    },
-    "gigagas scenario": {
-        "active_validators": 2_000_000,
-        "gas_limit": 1_000_000_000,
-        "proposer_slashings": 16,
-        "attester_slashings": 2,
-        "attestations": 8,
-        "voluntary_exits": 16,
-        "bls_to_execution_changes": 16,
-        "blob_count": 9,
-        "deposit_requests": 0,
-        "withdrawal_requests": 16,
-        "consolidation_requests": 2,
-        "auto_deposit_requests": True,
-        "transaction_type": "all_zeros",
-        "eip_7623_active": True,
-        "compressed": False
     }
 }
 
