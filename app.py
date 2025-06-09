@@ -172,7 +172,7 @@ def bytes_to_mib(bytes_val):
 def generate_calculation_notes(active_validators, gas_limit, proposer_slashings, attester_slashings, 
                              attestations, voluntary_exits, bls_to_execution_changes, blob_count,
                              deposit_requests, withdrawal_requests, consolidation_requests,
-                             auto_deposit_requests, deposit_gas_percentage, eip_7623_active, compressed):
+                             auto_deposit_requests, deposit_gas_percentage, transaction_type, eip_7623_active, compressed):
     """Generate calculation assumption notes for all components"""
     notes = []
     committee_size = calculate_committee_size(active_validators)
@@ -261,11 +261,17 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
             "Details": f"{consolidation_requests} requests × 116 bytes each"
         })
     
-    # Execution layer (worst-case)
+    # Execution layer
+    transaction_type_names = {
+        "all_zeros": "all zeros",
+        "all_nonzeros": "all non-zeros", 
+        "mixed": "mixed (29% zeros)",
+        "al_mixed": "access list + mixed"
+    }
     notes.append({
         "Component": "Execution Layer", 
-        "Assumption": f"EIP-7623 {'active' if eip_7623_active else 'inactive'}, all_zeros transactions",
-        "Details": f"Gas-to-size conversion, worst-case scenario{', Snappy compressed' if compressed else ''}"
+        "Assumption": f"EIP-7623 {'active' if eip_7623_active else 'inactive'}, {transaction_type_names[transaction_type]} transactions",
+        "Details": f"Gas-to-size conversion{', Snappy compressed' if compressed else ''}"
     })
     
     return notes
@@ -285,6 +291,41 @@ NETWORK_PRESETS = {
         "withdrawal_requests": 8,
         "consolidation_requests": 0,
         "auto_deposit_requests": False,
+        "transaction_type": "mixed",
+        "eip_7623_active": True,
+        "compressed": False
+    },
+    "worst case (36M)": {
+        "active_validators": 1_100_000,
+        "gas_limit": 36_000_000,
+        "proposer_slashings": 16,
+        "attester_slashings": 2,
+        "attestations": 8,
+        "voluntary_exits": 16,
+        "bls_to_execution_changes": 16,
+        "blob_count": 6,
+        "deposit_requests": 8192,
+        "withdrawal_requests": 16,
+        "consolidation_requests": 2,
+        "auto_deposit_requests": False,
+        "transaction_type": "all_zeros",
+        "eip_7623_active": True,
+        "compressed": False
+    },
+    "gigagas scenario": {
+        "active_validators": 2_000_000,
+        "gas_limit": 1_000_000_000,
+        "proposer_slashings": 16,
+        "attester_slashings": 2,
+        "attestations": 8,
+        "voluntary_exits": 16,
+        "bls_to_execution_changes": 16,
+        "blob_count": 6,
+        "deposit_requests": 0,
+        "withdrawal_requests": 16,
+        "consolidation_requests": 2,
+        "auto_deposit_requests": True,
+        "transaction_type": "all_zeros",
         "eip_7623_active": True,
         "compressed": False
     }
@@ -323,6 +364,7 @@ if selected_preset != "Custom":
     default_withdrawal_requests = preset["withdrawal_requests"]
     default_consolidation_requests = preset["consolidation_requests"]
     default_auto_deposit = preset["auto_deposit_requests"]
+    default_transaction_type = preset["transaction_type"]
     default_eip_7623 = preset["eip_7623_active"]
     default_compressed = preset["compressed"]
 else:
@@ -339,6 +381,7 @@ else:
     default_withdrawal_requests = 8
     default_consolidation_requests = 0
     default_auto_deposit = True
+    default_transaction_type = "all_zeros"
     default_eip_7623 = True
     default_compressed = False
 
@@ -469,8 +512,21 @@ if auto_deposit_requests:
 else:
     deposit_gas_percentage = 10  # Default for calculation notes
 
-# Transaction type for worst-case scenarios
-transaction_type = "all_zeros"  # Worst case: maximum block size
+# Transaction type selection
+transaction_types = {
+    "all_zeros": "All Zeros (Worst Case)",
+    "all_nonzeros": "All Non-zeros", 
+    "mixed": "Mixed (29% zeros, 71% non-zeros)",
+    "al_mixed": "Access List + Mixed"
+}
+
+transaction_type = st.sidebar.selectbox(
+    "Transaction Type",
+    options=list(transaction_types.keys()),
+    format_func=lambda x: transaction_types[x],
+    index=list(transaction_types.keys()).index(default_transaction_type),
+    help="Type of transaction data filling the block - affects compression and size"
+)
 
 eip_7623_active = st.sidebar.checkbox(
     "EIP-7623 Active",
@@ -520,7 +576,7 @@ calculation_notes = generate_calculation_notes(
     active_validators, gas_limit, proposer_slashings, attester_slashings,
     attestations, voluntary_exits, bls_to_execution_changes, blob_count,
     deposit_requests, withdrawal_requests, consolidation_requests,
-    auto_deposit_requests, deposit_gas_percentage, eip_7623_active, compressed
+    auto_deposit_requests, deposit_gas_percentage, transaction_type, eip_7623_active, compressed
 )
 
 # Display calculation assumptions
