@@ -24,13 +24,34 @@ def calculate_committee_size(active_validators):
     """Calculate committee size based on active validators: validators / 32 / 64"""
     return active_validators // 32 // 64
 
-def calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage=10):
-    """Calculate realistic number of deposit requests based on gas limit percentage"""
-    # Assume deposits use a percentage of total gas limit (default 10%)
-    # Each batch of 100 deposits costs ~3,150,000 gas
-    available_gas = gas_limit * (deposit_gas_percentage / 100)
-    batches = available_gas // 3_150_000
-    return min(int(batches * 100), ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"])
+def calculate_max_deposit_requests(gas_limit):
+    """Calculate maximum possible deposit requests based on gas limit"""
+    # Each individual deposit costs ~31,500 gas (3,150,000 gas per 100 deposits)
+    gas_per_deposit = 31_500
+    
+    # Calculate maximum individual deposits that fit in gas limit
+    max_deposits_by_gas = gas_limit // gas_per_deposit
+    
+    # Respect protocol limit
+    max_deposits_by_protocol = ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]
+    
+    return min(max_deposits_by_gas, max_deposits_by_protocol)
+
+def calculate_remaining_execution_gas(gas_limit, deposit_requests):
+    """Calculate remaining gas for execution payload after accounting for deposit requests"""
+    if deposit_requests == 0:
+        return gas_limit
+    
+    # Each individual deposit costs ~31,500 gas
+    gas_per_deposit = 31_500
+    
+    # Calculate actual gas consumed by deposits
+    gas_consumed_by_deposits = deposit_requests * gas_per_deposit
+    
+    # Remaining gas for execution payload
+    remaining_gas = gas_limit - gas_consumed_by_deposits
+    
+    return max(0, remaining_gas)  # Ensure non-negative
 
 def calculate_attester_slashing_size(num_slashings, active_validators):
     """
@@ -82,8 +103,7 @@ def calculate_consensus_block_size(active_validators, gas_limit,
                                  attestations=8, voluntary_exits=0,
                                  bls_to_execution_changes=0, blob_kzg_commitments=0,
                                  deposit_requests=0, withdrawal_requests=0, 
-                                 consolidation_requests=0,
-                                 auto_deposit_requests=False, deposit_gas_percentage=10):
+                                 consolidation_requests=0):
     """
     Calculate consensus layer block size in bytes using theoretical worst-case
     Based on detailed Ethereum consensus layer specifications
@@ -111,22 +131,19 @@ def calculate_consensus_block_size(active_validators, gas_limit,
     total_size += min(bls_to_execution_changes, ETHEREUM_ENTITIES["BLSToExecutionChange"]["max_per_block"]) * ETHEREUM_ENTITIES["BLSToExecutionChange"]["ssz_size"]
     total_size += min(blob_kzg_commitments, ETHEREUM_ENTITIES["BlobKZGCommitment"]["max_per_block"]) * ETHEREUM_ENTITIES["BlobKZGCommitment"]["ssz_size"]
     
-    # Post-Electra components - auto-calculate deposit requests if enabled
-    if auto_deposit_requests:
-        deposit_requests = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
-    
+    # Post-Electra components
     total_size += min(deposit_requests, ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["DepositRequest"]["ssz_size"]
     total_size += min(withdrawal_requests, ETHEREUM_ENTITIES["WithdrawalRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["WithdrawalRequest"]["ssz_size"]
     total_size += min(consolidation_requests, ETHEREUM_ENTITIES["ConsolidationRequest"]["max_per_block"]) * ETHEREUM_ENTITIES["ConsolidationRequest"]["ssz_size"]
     
     return total_size
 
-def calculate_execution_block_size(gas_limit, transaction_type="mixed", compressed=False, eip_7623=True):
+def calculate_execution_block_size(available_gas, transaction_type="mixed", compressed=False, eip_7623=True):
     """
     Calculate execution layer block size in bytes based on EIP-7623 and compression
     
     Args:
-        gas_limit: Gas limit in gas units
+        available_gas: Available gas for execution payload (after deposits)
         transaction_type: "all_zeros", "all_nonzeros", "mixed", "al_mixed" (access list + mixed)
         compressed: Whether to apply Snappy compression
         eip_7623: Whether EIP-7623 is active (default True for post-Dencun)
@@ -149,8 +166,8 @@ def calculate_execution_block_size(gas_limit, transaction_type="mixed", compress
             "al_mixed": 1.63 / 30_000_000        # 1.63 MiB per 30M gas
         }
     
-    # Calculate base size in MiB
-    mib_size = gas_limit * conversion_rates[transaction_type]
+    # Calculate base size in MiB using available gas
+    mib_size = available_gas * conversion_rates[transaction_type]
     
     if compressed:
         # Apply Snappy compression ratios from the table
@@ -169,10 +186,10 @@ def bytes_to_mib(bytes_val):
     """Convert bytes to MiB"""
     return bytes_val / (1024 * 1024)
 
-def generate_calculation_notes(active_validators, gas_limit, proposer_slashings, attester_slashings, 
+def generate_calculation_notes(active_validators, gas_limit, remaining_execution_gas, proposer_slashings, attester_slashings, 
                              attestations, voluntary_exits, bls_to_execution_changes, blob_count,
                              deposit_requests, withdrawal_requests, consolidation_requests,
-                             auto_deposit_requests, deposit_gas_percentage, transaction_type, eip_7623_active, compressed):
+                             transaction_type, eip_7623_active, compressed):
     """Generate calculation assumption notes for all components"""
     notes = []
     
@@ -192,20 +209,13 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
             "Details": f"{attestations} attestations × {validators_per_slot:,} validators ({active_validators:,}/32 per slot)"
         })
     
-    # Auto-calculated deposit requests
-    if auto_deposit_requests:
-        calc_deposits = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
-        available_gas = gas_limit * (deposit_gas_percentage / 100)
+    # Deposit requests (when enabled)
+    if deposit_requests > 0:
+        gas_used_by_deposits = gas_limit - remaining_execution_gas
         notes.append({
             "Component": "Deposit Requests", 
-            "Assumption": "Gas allocation-based calculation",
-            "Details": f"{deposit_gas_percentage}% of {gas_limit:,} gas = {available_gas:,.0f} gas → {calc_deposits} deposits"
-        })
-    elif deposit_requests > 0:
-        notes.append({
-            "Component": "Deposit Requests", 
-            "Assumption": "Manual override",
-            "Details": f"{deposit_requests} deposits (user-specified)"
+            "Assumption": "Reduces execution gas allocation",
+            "Details": f"{deposit_requests:,} deposits using {gas_used_by_deposits:,} gas"
         })
     
     # Proposer slashings
@@ -271,7 +281,7 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     notes.append({
         "Component": "Execution Layer", 
         "Assumption": f"EIP-7623 {'active' if eip_7623_active else 'inactive'}, {transaction_type_names[transaction_type]} transactions",
-        "Details": f"Gas-to-size conversion{', Snappy compressed' if compressed else ''}"
+        "Details": f"{remaining_execution_gas:,} gas available for execution{', Snappy compressed' if compressed else ''}"
     })
     
     return notes
@@ -287,10 +297,9 @@ NETWORK_PRESETS = {
         "voluntary_exits": 2,
         "bls_to_execution_changes": 8,
         "blob_count": 9,
-        "deposit_requests": 0,
+        "deposit_requests": 0,  # Realistic: no mass deposits
         "withdrawal_requests": 8,
         "consolidation_requests": 0,
-        "auto_deposit_requests": False,
         "transaction_type": "mixed",
         "eip_7623_active": True,
         "compressed": False
@@ -304,10 +313,9 @@ NETWORK_PRESETS = {
         "voluntary_exits": 16,
         "bls_to_execution_changes": 16,
         "blob_count": 9,
-        "deposit_requests": 8192,
+        "deposit_requests": 0,  # Worst case might be no deposits, max execution
         "withdrawal_requests": 16,
         "consolidation_requests": 2,
-        "auto_deposit_requests": False,
         "transaction_type": "all_zeros",
         "eip_7623_active": True,
         "compressed": False
@@ -317,8 +325,7 @@ NETWORK_PRESETS = {
 # Streamlit App
 st.set_page_config(page_title="Ethereum Block Size Calculator", layout="wide")
 
-st.title("🔗 Ethereum Electra Block Size Calculator")
-st.caption("Calculate theoretical worst-case block sizes with post-Electra features")
+st.title("🔗 Ethereum Block Size Calculator")
 
 # Sidebar for parameters
 st.sidebar.header("⚙️ Network Parameters")
@@ -346,7 +353,6 @@ if selected_preset != "Custom":
     default_deposit_requests = preset["deposit_requests"]
     default_withdrawal_requests = preset["withdrawal_requests"]
     default_consolidation_requests = preset["consolidation_requests"]
-    default_auto_deposit = preset["auto_deposit_requests"]
     default_transaction_type = preset["transaction_type"]
     default_eip_7623 = preset["eip_7623_active"]
     default_compressed = preset["compressed"]
@@ -363,7 +369,6 @@ else:
     default_deposit_requests = 0
     default_withdrawal_requests = 8
     default_consolidation_requests = 0
-    default_auto_deposit = True
     default_transaction_type = "all_zeros"
     default_eip_7623 = True
     default_compressed = False
@@ -450,15 +455,34 @@ blob_kzg_commitments = blob_count  # Each blob has one KZG commitment
 
 st.sidebar.subheader("Post-Electra Operations")
 
+# Calculate dynamic max for deposit requests
+max_possible_deposits = calculate_max_deposit_requests(gas_limit)
+
 # Post-Electra operations
 deposit_requests = st.sidebar.slider(
     "Deposit Requests",
     min_value=0,
-    max_value=ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"],
-    value=default_deposit_requests,
-    step=100,
-    help=f"Max {ETHEREUM_ENTITIES['DepositRequest']['max_per_block']} per block - new deposit system"
+    max_value=max_possible_deposits,
+    value=min(default_deposit_requests, max_possible_deposits),  # Ensure default doesn't exceed max
+    step=10,
+    help=f"Max {max_possible_deposits:,} with {gas_limit_millions}M gas (protocol limit: {ETHEREUM_ENTITIES['DepositRequest']['max_per_block']:,})"
 )
+
+# Calculate remaining gas for execution payload
+remaining_execution_gas = calculate_remaining_execution_gas(gas_limit, deposit_requests)
+
+# Show constraint information
+protocol_limit = ETHEREUM_ENTITIES["DepositRequest"]["max_per_block"]
+if max_possible_deposits < protocol_limit:
+    st.sidebar.warning(f"⚠️ Gas limit constrains deposits to {max_possible_deposits:,} (protocol allows {protocol_limit:,})")
+
+# Show gas allocation
+if deposit_requests > 0:
+    gas_used_by_deposits = gas_limit - remaining_execution_gas
+    st.sidebar.info(f"📊 {deposit_requests:,} deposits using {gas_used_by_deposits:,} gas")
+    st.sidebar.info(f"⛽ {remaining_execution_gas:,} gas remaining for execution")
+else:
+    st.sidebar.info(f"⛽ {gas_limit:,} gas available for execution")
 
 withdrawal_requests = st.sidebar.slider(
     "Withdrawal Requests",
@@ -477,23 +501,6 @@ consolidation_requests = st.sidebar.slider(
 )
 
 st.sidebar.subheader("Execution Layer Settings")
-
-auto_deposit_requests = st.sidebar.checkbox(
-    "Auto-calculate Deposit Requests",
-    value=default_auto_deposit,
-    help="Calculate deposit requests based on percentage of gas limit allocated to deposits"
-)
-
-if auto_deposit_requests:
-    deposit_gas_percentage = st.sidebar.slider(
-        "Deposit Gas Allocation (%)",
-        min_value=1,
-        max_value=100,
-        value=10,
-        help="Percentage of block gas limit allocated to deposit requests (100% = theoretical maximum)"
-    )
-else:
-    deposit_gas_percentage = 10  # Default for calculation notes
 
 # Transaction type selection
 transaction_types = {
@@ -540,13 +547,11 @@ consensus_size = calculate_consensus_block_size(
     blob_kzg_commitments=blob_kzg_commitments,
     deposit_requests=deposit_requests,
     withdrawal_requests=withdrawal_requests,
-    consolidation_requests=consolidation_requests,
-    auto_deposit_requests=auto_deposit_requests,
-    deposit_gas_percentage=deposit_gas_percentage
+    consolidation_requests=consolidation_requests
 )
 
 execution_size = calculate_execution_block_size(
-    gas_limit=gas_limit,
+    available_gas=remaining_execution_gas,
     transaction_type=transaction_type,
     compressed=compressed,
     eip_7623=eip_7623_active
@@ -556,10 +561,10 @@ total_size = consensus_size + execution_size
 
 # Generate calculation notes
 calculation_notes = generate_calculation_notes(
-    active_validators, gas_limit, proposer_slashings, attester_slashings,
+    active_validators, gas_limit, remaining_execution_gas, proposer_slashings, attester_slashings,
     attestations, voluntary_exits, bls_to_execution_changes, blob_count,
     deposit_requests, withdrawal_requests, consolidation_requests,
-    auto_deposit_requests, deposit_gas_percentage, transaction_type, eip_7623_active, compressed
+    transaction_type, eip_7623_active, compressed
 )
 
 # Display calculation assumptions
@@ -599,10 +604,8 @@ with col3:
 
 # Component breakdown
 
-# Handle auto-calculated deposit requests
+# Use calculated deposit requests
 breakdown_deposit_requests = deposit_requests
-if auto_deposit_requests:
-    breakdown_deposit_requests = calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage)
 
 # Calculate all component sizes and counts
 component_data = {
