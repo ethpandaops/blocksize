@@ -34,8 +34,8 @@ def calculate_realistic_deposit_requests(gas_limit, deposit_gas_percentage=10):
 
 def calculate_attester_slashing_size(num_slashings, active_validators):
     """
-    Calculate size of attester slashings based on actual validator set size
-    Both attestations can include all active validators in worst case
+    Calculate size of attester slashings based on slot-scoped validator count
+    Each attestation in a slashing can only include validators from its slot
     """
     if num_slashings == 0:
         return 0
@@ -44,10 +44,13 @@ def calculate_attester_slashing_size(num_slashings, active_validators):
     attestation_overhead = ETHEREUM_ENTITIES["AttesterSlashing"]["attestation_overhead"]
     per_index = ETHEREUM_ENTITIES["AttesterSlashing"]["per_index"]
     
-    # Worst-case: both attestations include all active validators
-    # Each slashing has two conflicting attestations, each can have all validators
+    # Validators per slot: total validators / 32 slots per epoch
+    validators_per_slot = active_validators // 32
+    
+    # Worst-case: both conflicting attestations include all validators from their respective slots
+    # Each slashing has two conflicting attestations, each with max validators for that slot
     size_per_slashing = (base_size + 
-                       2 * (attestation_overhead + active_validators * per_index))
+                       2 * (attestation_overhead + validators_per_slot * per_index))
     
     return num_slashings * size_per_slashing
 
@@ -215,10 +218,11 @@ def generate_calculation_notes(active_validators, gas_limit, proposer_slashings,
     
     # Attester slashings
     if attester_slashings > 0:
+        validators_per_slot = active_validators // 32
         notes.append({
             "Component": "Attester Slashings", 
-            "Assumption": "Worst-case validator set",
-            "Details": f"{attester_slashings} slashings with {active_validators:,} validators each side"
+            "Assumption": "Worst-case per slot",
+            "Details": f"{attester_slashings} slashings with {validators_per_slot:,} validators each side ({active_validators:,}/32 per slot)"
         })
     
     # Other consensus operations
