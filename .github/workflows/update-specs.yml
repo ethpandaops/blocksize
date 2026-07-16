@@ -1,16 +1,17 @@
-# The point of this repository: when a new consensus-specs release or
-# execution-specs (EELS) version lands, this workflow re-extracts the
-# spec data, proves the size engine still reproduces the spec's own SSZ
-# sizing for every container (npm test), and opens a PR with the diff.
-# New forks and changed parameters flow through with no code changes;
-# a genuinely new SSZ construct fails the extractor or the tests and
-# shows up as a red PR instead of a silently wrong site.
+# The point of this repository: every night this workflow re-extracts
+# the spec data from the latest consensus-specs release and EELS HEAD,
+# proves the size engine still reproduces the spec's own SSZ sizing for
+# every container (npm test, including the constants-coverage ratchet),
+# and — when the specs actually changed — commits the refresh to master
+# and redeploys the site. New forks and changed parameters flow through
+# with no code changes; a genuinely new SSZ construct fails verification
+# and surfaces as a PR for human eyes instead of a silently wrong site.
 
 name: Update spec data
 
 on:
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '17 4 * * *'
   workflow_dispatch:
     inputs:
       consensus_tag:
@@ -20,12 +21,18 @@ on:
         description: 'execution-specs git ref (default: HEAD, which EELS points at the in-development fork)'
         required: false
 
+concurrency:
+  group: update-specs
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -71,22 +78,77 @@ jobs:
           /tmp/elenv/bin/python extractor/extract_el.py \
             --version '${{ steps.versions.outputs.el }}' --out spec-data/el.json
 
+      - name: Detect substantive changes
+        id: detect
+        run: |
+          # Provenance lines (tag, EL git SHA) move without the data
+          # changing; only redeploy when the extracted content differs.
+          if git diff -I'"(version|tag)": ' --quiet -- spec-data/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            git checkout -- spec-data/
+            echo "spec data unchanged; nothing to deploy"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- spec-data/
+          fi
+
       - name: Verify engine against new spec data
+        if: steps.detect.outputs.changed == 'true'
         run: |
           npm ci
           npm test
           npm run build
 
+      - name: Commit to master
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add spec-data/
+          git commit -m 'spec-data: consensus-specs ${{ steps.versions.outputs.tag }} / EELS ${{ steps.versions.outputs.el }}'
+          git push origin HEAD:master
+
+      # Verification failed on real spec changes: surface the diff as a
+      # PR instead of leaving a red cron run nobody sees.
       - uses: peter-evans/create-pull-request@v7
+        if: failure() && steps.detect.outputs.changed == 'true'
         with:
-          branch: update-spec-data
-          title: 'spec-data: consensus-specs ${{ steps.versions.outputs.tag }} / EELS ${{ steps.versions.outputs.el }}'
-          commit-message: 'Update spec data to consensus-specs ${{ steps.versions.outputs.tag }} and EELS ${{ steps.versions.outputs.el }}'
+          branch: update-spec-data-failed
+          title: 'spec-data refresh failed verification: ${{ steps.versions.outputs.tag }} / ${{ steps.versions.outputs.el }}'
+          commit-message: 'spec-data: consensus-specs ${{ steps.versions.outputs.tag }} / EELS ${{ steps.versions.outputs.el }} (verification failed)'
           body: |
-            Automated spec data refresh.
+            The nightly spec refresh extracted new data but the size engine
+            failed verification against it — likely a new SSZ construct or a
+            restructured constant the model needs to learn about.
 
             - `ethereum/consensus-specs` @ `${{ steps.versions.outputs.tag }}`
             - `ethereum/execution-specs` (EELS) @ `${{ steps.versions.outputs.el }}`
 
-            The size engine was verified against the new data: every container's
-            min/max SSZ size must match the spec build's own computation.
+            See the failing run for details.
+
+  deploy:
+    needs: update
+    if: needs.update.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
