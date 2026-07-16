@@ -1,113 +1,89 @@
 # Ethereum Block Size Calculator
 
-A comprehensive tool for calculating and visualizing Ethereum block sizes across different network configurations, including support for the Electra upgrade features.
+**Live**: https://ethpandaops.github.io/blocksize/
 
-## 🌐 Live Demo
+Interactive calculator for Ethereum block sizes across every consensus fork —
+raw SSZ, actual gossip wire size, blob/DAS footprint — derived entirely from
+the spec repositories. Nothing is transcribed by hand.
 
-**Try it online**: https://ethpandaops.github.io/blocksize/
+## How it stays correct
 
-The app runs entirely in your browser using [stlite](https://github.com/whitphx/stlite) - no server required!
+The design goal: **a new spec release requires zero code changes here.**
 
-## Features
+1. `extractor/extract.py` runs inside an [ethereum/consensus-specs] checkout
+   (after its own pyspec build) and dumps every fork's SSZ container schemas,
+   preset constants, config (fork epochs, blob schedule), and referenced EIPs
+   to `spec-data/consensus.json`. Each container's min/max byte length as
+   computed by the spec's own SSZ implementation (remerkleable) is included
+   as ground truth.
+2. `extractor/extract_el.py` dumps per-fork gas constants (intrinsic costs,
+   EIP-7623 calldata floor, EIP-7825 tx gas cap, blob schedule) from
+   [ethereum/execution-specs] (EELS, `ethereum-execution` on PyPI).
+3. The frontend's size engine (`src/lib/ssz.ts`) interprets those schemas
+   generically: SSZ min/max sizing, exact instance sizing, and byte-level
+   construction. The test suite asserts the engine reproduces the spec's own
+   min/max for **every container in every fork** — if a release introduces an
+   SSZ construct the engine can't handle, tests fail loudly.
+4. UI knobs (sliders) are **discovered from the schema**: every list in the
+   block body becomes a control, capped by its SSZ limit or, for progressive
+   (EIP-7495-style) lists, the fork's processing-limit constants. A new fork's
+   new fields appear automatically — as gloas's `payload_attestations` and
+   builder requests do today.
+5. The `update-specs` workflow (weekly + manual) re-runs both extractors
+   against the latest releases, re-verifies, and opens a PR with the diff.
 
-- **Consensus Layer Calculations**: BeaconBlock, attestations, slashings, exits, BLS changes
-- **Post-Electra Support**: Deposit requests, withdrawal requests, consolidation requests  
-- **Execution Layer Modeling**: EIP-7623 effects, compression scenarios, gas limit variations
-- **Interactive Visualizations**: Component breakdowns, size comparisons, parameter exploration
-- **Preset Configurations**: Common network scenarios (mainnet, testnet configurations)
-- **Theoretical Worst-Case Analysis**: Maximum possible block sizes under extreme conditions
+Behavior is keyed to extracted *constants*, never to fork names or EIP tables:
+EIP-7623 floor pricing applies because `FLOOR_CALLDATA_COST` exists in the
+fork's constants, the tx cap because `TX_MAX_GAS_LIMIT` exists, and so on.
 
-## Installation
+## Compression is measured, not estimated
+
+The tool constructs the actual serialized bytes of the configured block —
+correct SSZ layout, seeded-random bytes for cryptographic fields (signatures,
+roots, pubkeys, KZG objects), realistic small integers for counters, and
+calldata matching the selected scenario (all-zeros / mixed / random) — then
+runs real Snappy over them:
+
+- **gossip**: raw (block-format) Snappy, as libp2p gossip uses
+- **req/resp**: framed Snappy with per-64KiB-chunk overhead
+- plus the analytic worst-case ceiling (`32 + n + n/6`)
+
+So "compressed size" is the measured wire size of the modeled content, and
+the content is an explicit input rather than a hardcoded ratio.
+
+The one modeling layer that is *not* spec-derived is a small set of
+name-keyed physical constraints (`src/lib/constraints.ts`): how full an
+aggregation bitfield gets for a validator count, how many bytes of calldata a
+gas limit buys, deposit-contract gas per deposit request. Unmatched fields
+fall back to their spec worst case.
+
+## Development
 
 ```bash
-# Clone the repository
-git clone https://github.com/ethpandaops/blocksizes.git
-cd blocksizes
-
-# Install dependencies using uv (recommended)
-uv sync
-
-# Or using pip
-pip install -r requirements.txt
+npm install
+npm run dev        # local dev server
+npm test           # engine vs spec ground truth + integration tests
+npm run build      # production build (dist/)
 ```
 
-## Usage
-
-### Local Development
-```bash
-# Run the Streamlit app locally
-streamlit run app.py
-
-# Or using the run script
-./run.sh
-```
-
-The app will be available at `http://localhost:8501`
-
-### Deployment
-
-The app is automatically deployed to GitHub Pages using stlite. To update the deployment:
+To refresh spec data locally:
 
 ```bash
-# Rebuild and deploy after making changes to app.py
-./deploy.sh
+# consensus: needs a consensus-specs checkout with a built pyspec
+git clone --depth 1 --branch <tag> https://github.com/ethereum/consensus-specs /tmp/consensus-specs
+cd /tmp/consensus-specs && uv sync --all-extras && uv run python -m pysetup.generate_specs --all-forks
+uv run python <this-repo>/extractor/extract.py --tag <tag> --out <this-repo>/spec-data/consensus.json
+
+# execution: plain PyPI package
+uv venv /tmp/elenv && uv pip install --python /tmp/elenv/bin/python ethereum-execution==<version>
+/tmp/elenv/bin/python extractor/extract_el.py --version <version> --out spec-data/el.json
 ```
 
-Or manually:
-```bash
-# Just rebuild index.html from app.py
-./build.sh
+## Stack
 
-# Then commit and push
-git add index.html
-git commit -m "Update deployment"
-git push
-```
+Vite + React + TypeScript + Tailwind CSS v4, [snappyjs] for compression,
+deployed to GitHub Pages. No backend; everything runs in the browser.
 
-## Configuration
-
-The calculator includes several preset network configurations and supports custom parameter adjustment for:
-
-- Active validator counts (100k - 5M)
-- Gas limits (15M - 1000M = 1 gigagas)
-- All consensus layer operations with realistic limits
-- EIP-7623 effects and compression scenarios
-
-## Technical Details
-
-### Consensus Layer Components
-- **BeaconBlock/Body**: Fixed SSZ overhead (500 bytes)
-- **Attestations**: EIP-7549 cross-committee aggregation support
-- **Slashings**: Theoretical worst-case with maximum validator sets
-- **Post-Electra**: New deposit system, withdrawal & consolidation requests
-
-### Execution Layer Modeling
-- **EIP-7623**: Calldata cost increases and size reductions
-- **Transaction Types**: all_zeros, all_nonzeros, mixed, access_list scenarios
-- **Compression**: Snappy compression effects on different data patterns
-- **Gas Conversion**: Empirical gas-to-size conversion rates
-
-### Deployment Architecture
-- **Runtime**: [stlite](https://github.com/whitphx/stlite) (Streamlit in browser via Pyodide)
-- **Hosting**: GitHub Pages (static hosting)
-- **Build Process**: Dynamic `index.html` generation from `app.py`
-- **Dependencies**: Bundled client-side (numpy, pandas, plotly)
-
-## Development Scripts
-
-- `./build.sh` - Rebuild `index.html` from `app.py`
-- `./deploy.sh` - Build and deploy to GitHub Pages
-- `./run.sh` - Run local Streamlit development server
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes to `app.py`
-4. Test locally with `streamlit run app.py`
-5. Run `./deploy.sh` to update the live demo
-6. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+[ethereum/consensus-specs]: https://github.com/ethereum/consensus-specs
+[ethereum/execution-specs]: https://github.com/ethereum/execution-specs
+[snappyjs]: https://github.com/zhipeng-jia/snappyjs

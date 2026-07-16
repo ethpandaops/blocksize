@@ -1,0 +1,90 @@
+# The point of this repository: when a new consensus-specs release or
+# execution-specs (EELS) version lands, this workflow re-extracts the
+# spec data, proves the size engine still reproduces the spec's own SSZ
+# sizing for every container (npm test), and opens a PR with the diff.
+# New forks and changed parameters flow through with no code changes;
+# a genuinely new SSZ construct fails the extractor or the tests and
+# shows up as a red PR instead of a silently wrong site.
+
+name: Update spec data
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      consensus_tag:
+        description: 'consensus-specs tag (default: latest release, prereleases included)'
+        required: false
+      el_version:
+        description: 'ethereum-execution (EELS) version (default: latest on PyPI)'
+        required: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ inputs.consensus_tag }}'
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api repos/ethereum/consensus-specs/releases --jq '.[0].tag_name')
+          fi
+          EL='${{ inputs.el_version }}'
+          if [ -z "$EL" ]; then
+            EL=$(curl -s https://pypi.org/pypi/ethereum-execution/json | jq -r '.info.version')
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "el=$EL" >> "$GITHUB_OUTPUT"
+
+      - name: Extract consensus spec data
+        run: |
+          git clone --depth 1 --branch '${{ steps.versions.outputs.tag }}' \
+            https://github.com/ethereum/consensus-specs /tmp/consensus-specs
+          cd /tmp/consensus-specs
+          uv sync --all-extras
+          uv run python -m pysetup.generate_specs --all-forks
+          uv run python "$GITHUB_WORKSPACE/extractor/extract.py" \
+            --tag '${{ steps.versions.outputs.tag }}' \
+            --out "$GITHUB_WORKSPACE/spec-data/consensus.json"
+
+      - name: Extract execution spec data
+        run: |
+          uv venv /tmp/elenv
+          uv pip install --python /tmp/elenv/bin/python \
+            'ethereum-execution==${{ steps.versions.outputs.el }}'
+          /tmp/elenv/bin/python extractor/extract_el.py \
+            --version '${{ steps.versions.outputs.el }}' --out spec-data/el.json
+
+      - name: Verify engine against new spec data
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: update-spec-data
+          title: 'spec-data: consensus-specs ${{ steps.versions.outputs.tag }} / EELS ${{ steps.versions.outputs.el }}'
+          commit-message: 'Update spec data to consensus-specs ${{ steps.versions.outputs.tag }} and EELS ${{ steps.versions.outputs.el }}'
+          body: |
+            Automated spec data refresh.
+
+            - `ethereum/consensus-specs` @ `${{ steps.versions.outputs.tag }}`
+            - `ethereum/execution-specs` (EELS) @ `${{ steps.versions.outputs.el }}`
+
+            The size engine was verified against the new data: every container's
+            min/max SSZ size must match the spec build's own computation.
