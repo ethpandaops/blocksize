@@ -1,5 +1,5 @@
 import type { CalldataScenario } from '../lib/el';
-import { gasPerByte } from '../lib/el';
+import { gasPerByte, isUpcoming } from '../lib/el';
 import { formatBytes, formatCount, forkLabel } from '../lib/format';
 import type { BlockSizeResult } from '../lib/model';
 import type { ConsensusSpec } from '../lib/schema';
@@ -49,11 +49,11 @@ export function InfoCards({
     <div className="grid gap-3 md:grid-cols-2">
       {result.elModel !== null && result.payloadPlan !== null ? (
         <Card
-          title={
-            result.envelope !== null
-              ? `Execution payload — builder envelope, EL fork: ${forkLabel(result.elModel.fork.name)}`
-              : `Execution payload — EL fork: ${forkLabel(result.elModel.fork.name)}`
-          }
+          title={`Execution payload — ${
+            result.envelope !== null ? 'builder envelope, ' : ''
+          }EL fork: ${forkLabel(result.elModel.fork.name)}${
+            isUpcoming(result.elModel.fork) ? ' (upcoming)' : ''
+          }`}
         >
           {result.envelope !== null && (
             <p className="text-xs/5 text-ink-muted">

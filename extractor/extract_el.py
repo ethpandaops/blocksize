@@ -26,13 +26,22 @@ def json_int(value: int):
 def module_constants(module):
     out = {}
     for name in dir(module):
-        if not name.isupper():
-            continue
         value = getattr(module, name)
-        try:
-            out[name] = json_int(int(value))
-        except (TypeError, ValueError):
-            continue
+        if name.isupper():
+            try:
+                out[name] = json_int(int(value))
+            except (TypeError, ValueError):
+                continue
+        elif isinstance(value, type) and value.__module__ == module.__name__:
+            # Newer forks group costs in classes (e.g. amsterdam's
+            # GasCosts, EIP-7778 gas schedule restructuring).
+            for member in dir(value):
+                if not member.isupper():
+                    continue
+                try:
+                    out[member] = json_int(int(getattr(value, member)))
+                except (TypeError, ValueError):
+                    continue
     return out
 
 

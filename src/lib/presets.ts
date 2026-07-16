@@ -15,19 +15,35 @@ export type ForkStatus = 'live' | 'scheduled' | 'development' | 'feature';
 export function forkStatus(spec: ConsensusSpec, fork: string, now = Date.now()): ForkStatus {
   if (fork.startsWith('eip')) return 'feature';
   const epochRaw = spec.config[`${fork.toUpperCase()}_FORK_EPOCH`] as JsonInt | undefined;
-  const epoch = toBigInt(epochRaw ?? null);
+  // The genesis fork has no *_FORK_EPOCH config entry; it has been live
+  // since slot 0.
+  if (epochRaw === undefined) return 'live';
+  const epoch = toBigInt(epochRaw);
   if (epoch === null || epoch >= FAR_FUTURE_EPOCH) return 'development';
   const currentEpoch = Math.floor((now / 1000 - MAINNET_GENESIS_TIME) / SECONDS_PER_EPOCH);
   return Number(epoch) <= currentEpoch ? 'live' : 'scheduled';
 }
 
-/** The newest fork that is live on mainnet — the app's landing fork. */
+/** The newest fork that is live on mainnet. */
 export function currentMainnetFork(spec: ConsensusSpec): string {
   let current = spec.forkOrder[0];
   for (const fork of spec.forkOrder) {
     if (forkStatus(spec, fork) === 'live') current = fork;
   }
   return current;
+}
+
+/**
+ * The app's landing fork: the next upcoming mainnet fork (scheduled or
+ * in development), falling back to the newest live one. Feature forks
+ * (eip*) are never the default.
+ */
+export function landingFork(spec: ConsensusSpec): string {
+  for (const fork of spec.forkOrder) {
+    const status = forkStatus(spec, fork);
+    if (status === 'scheduled' || status === 'development') return fork;
+  }
+  return currentMainnetFork(spec);
 }
 
 export interface PresetDefaults {

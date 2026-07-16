@@ -34,23 +34,39 @@ export function latestElFork(spec: ElSpec): ElFork {
   return spec.forks[spec.forks.length - 1];
 }
 
+/**
+ * First matching constant across naming generations: EELS module-level
+ * names through prague/osaka, and amsterdam's GasCosts members
+ * (EIP-7778 gas schedule restructuring).
+ */
+export function firstConstant(
+  fork: ElFork,
+  names: string[],
+  fallback: number | null,
+): number | null {
+  for (const name of names) {
+    if (fork.constants[name] !== undefined) return toNumber(fork.constants[name]);
+  }
+  return fallback;
+}
+
 export function elModelFor(fork: ElFork): ElModel {
-  const c = fork.constants;
-  const standardTokenCost =
-    c['STANDARD_CALLDATA_TOKEN_COST'] !== undefined
-      ? toNumber(c['STANDARD_CALLDATA_TOKEN_COST'])
-      : c['TX_DATA_COST_PER_ZERO'] !== undefined
-        ? toNumber(c['TX_DATA_COST_PER_ZERO'])
-        : 4;
   return {
     fork,
-    txBaseCost: c['TX_BASE_COST'] !== undefined ? toNumber(c['TX_BASE_COST']) : 21000,
-    standardTokenCost,
-    floorTokenCost:
-      c['FLOOR_CALLDATA_COST'] !== undefined ? toNumber(c['FLOOR_CALLDATA_COST']) : null,
-    txMaxGasLimit:
-      c['TX_MAX_GAS_LIMIT'] !== undefined ? toNumber(c['TX_MAX_GAS_LIMIT']) : null,
+    txBaseCost: firstConstant(fork, ['TX_BASE_COST', 'TX_BASE'], 21000)!,
+    standardTokenCost: firstConstant(
+      fork,
+      ['STANDARD_CALLDATA_TOKEN_COST', 'TX_DATA_TOKEN_STANDARD', 'TX_DATA_COST_PER_ZERO'],
+      4,
+    )!,
+    floorTokenCost: firstConstant(fork, ['FLOOR_CALLDATA_COST', 'TX_DATA_TOKEN_FLOOR'], null),
+    txMaxGasLimit: firstConstant(fork, ['TX_MAX_GAS_LIMIT'], null),
   };
+}
+
+/** Not yet scheduled on mainnet (in-development fork, e.g. amsterdam). */
+export function isUpcoming(fork: ElFork): boolean {
+  return fork.criteria.value === null;
 }
 
 /** Calldata tokens per byte for a scenario (zero byte = 1, non-zero = 4). */

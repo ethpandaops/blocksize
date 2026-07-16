@@ -47,6 +47,7 @@ export interface ConsensusSpec {
 export interface ElFork {
   name: string;
   criteria: { kind: string; value: number | null };
+  eips?: number[];
   constants: Record<string, JsonInt>;
 }
 

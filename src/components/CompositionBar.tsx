@@ -1,5 +1,4 @@
 import { fieldLabel, formatBytes } from '../lib/format';
-import type { BlockSizeResult } from '../lib/model';
 
 const SERIES = [
   'bg-series-1',
@@ -15,24 +14,37 @@ const SERIES = [
 const MAX_NAMED_SEGMENTS = 7;
 const MIN_SHARE_PERCENT = 1;
 
-export function CompositionBar({ result }: { result: BlockSizeResult }) {
-  const total = result.breakdown.reduce((a, f) => a + f.bytes, 0n) + result.envelopeBytes;
+export interface CompositionRow {
+  name: string;
+  bytes: bigint;
+}
+
+export function CompositionBar({
+  title,
+  rows,
+  residualLabel,
+  residualBytes,
+}: {
+  title: string;
+  /** In schema field order — colors key to position, not size rank. */
+  rows: CompositionRow[];
+  residualLabel: string;
+  residualBytes: bigint;
+}) {
+  const total = rows.reduce((a, f) => a + f.bytes, 0n) + residualBytes;
   if (total === 0n) return null;
 
   // Color is keyed to the field's schema position, so a segment keeps its
   // hue as knobs move it up or down the ranking. Membership in the named
   // set is by size; the residual is neutral gray (it is not an entity).
-  const colorByField = new Map(result.breakdown.map((f, i) => [f.name, SERIES[i % SERIES.length]]));
+  const colorByField = new Map(rows.map((f, i) => [f.name, SERIES[i % SERIES.length]]));
   const share = (bytes: bigint) => Number((bytes * 10000n) / total) / 100;
 
-  const bySize = [...result.breakdown]
-    .filter((f) => f.bytes > 0n)
-    .sort((a, b) => (a.bytes > b.bytes ? -1 : 1));
+  const bySize = [...rows].filter((f) => f.bytes > 0n).sort((a, b) => (a.bytes > b.bytes ? -1 : 1));
   const named = bySize
     .slice(0, MAX_NAMED_SEGMENTS)
     .filter((f) => share(f.bytes) >= MIN_SHARE_PERCENT);
-  const restBytes =
-    bySize.slice(named.length).reduce((a, f) => a + f.bytes, 0n) + result.envelopeBytes;
+  const restBytes = bySize.slice(named.length).reduce((a, f) => a + f.bytes, 0n) + residualBytes;
 
   const segments = [
     ...named.map((f) => ({
@@ -40,13 +52,17 @@ export function CompositionBar({ result }: { result: BlockSizeResult }) {
       bytes: f.bytes,
       color: colorByField.get(f.name)!,
     })),
-    { name: 'everything else', bytes: restBytes, color: 'bg-ink-muted' },
+    {
+      name: bySize.length > named.length ? `everything else + ${residualLabel}` : residualLabel,
+      bytes: restBytes,
+      color: 'bg-ink-muted',
+    },
   ].filter((s) => s.bytes > 0n);
 
   return (
     <figure className="rounded-lg border border-hairline bg-surface p-4">
-      <figcaption className="text-sm/6 font-semibold">Where the bytes live</figcaption>
-      <div className="mt-3 flex h-9 w-full gap-0.5" role="img" aria-label="Block composition">
+      <figcaption className="text-sm/6 font-semibold">{title}</figcaption>
+      <div className="mt-3 flex h-9 w-full gap-0.5" role="img" aria-label={title}>
         {segments.map((s) => (
           <div
             key={s.name}

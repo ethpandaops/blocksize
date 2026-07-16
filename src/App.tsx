@@ -1,46 +1,70 @@
 import { useMemo, useState } from 'react';
 import consensusJson from '../spec-data/consensus.json';
 import elJson from '../spec-data/el.json';
-import { BreakdownTable } from './components/BreakdownTable';
+import { BreakdownTable, type BreakdownRow } from './components/BreakdownTable';
 import { CompositionBar } from './components/CompositionBar';
 import { Controls } from './components/Controls';
 import { ForkRail } from './components/ForkRail';
 import { InfoCards } from './components/InfoCards';
 import { StatTiles } from './components/StatTiles';
-import { discoverKnobs } from './lib/knobs';
-import { balWorstCaseBytes, computeBlockSize, type UserState } from './lib/model';
-import { useDebouncedValue } from './lib/useDebouncedValue';
-import {
-  currentMainnetFork,
-  DEFAULTS,
-  typicalKnobValues,
-  worstCaseKnobValues,
-} from './lib/presets';
 import type { CalldataScenario } from './lib/el';
+import { formatCount } from './lib/format';
+import { discoverKnobs } from './lib/knobs';
+import {
+  balWorstCaseBytes,
+  computeBlockSize,
+  type BlockSizeResult,
+  type UserState,
+} from './lib/model';
+import { DEFAULTS, landingFork, typicalKnobValues, worstCaseKnobValues } from './lib/presets';
 import type { ConsensusSpec, ElSpec } from './lib/schema';
+import { useDebouncedValue } from './lib/useDebouncedValue';
 
 const spec = consensusJson as unknown as ConsensusSpec;
 const elSpec = elJson as unknown as ElSpec;
 
+function blockRows(result: BlockSizeResult, knobValues: Record<string, number>): BreakdownRow[] {
+  return result.breakdown.map((f) => {
+    const knobPath = Object.keys(knobValues).find((p) => p.endsWith(`.${f.name}`));
+    const count =
+      knobPath !== undefined
+        ? formatCount(knobValues[knobPath])
+        : f.name === 'execution_payload'
+          ? formatCount(result.payloadPlan?.txCount ?? 0)
+          : '—';
+    return { name: f.name, count, bytes: f.bytes };
+  });
+}
+
+function envelopeRows(result: BlockSizeResult): BreakdownRow[] {
+  if (result.envelope === null) return [];
+  return result.envelope.breakdown.map((f) => ({
+    name: f.name,
+    count: f.name === 'transactions' ? formatCount(result.payloadPlan?.txCount ?? 0) : '—',
+    bytes: f.bytes,
+  }));
+}
+
 export default function App() {
-  const landingFork = useMemo(() => currentMainnetFork(spec), []);
-  const [fork, setFork] = useState(landingFork);
+  const initialFork = useMemo(() => landingFork(spec), []);
+  const [fork, setFork] = useState(initialFork);
   const [activeValidators, setActiveValidators] = useState(DEFAULTS.activeValidators);
   const [gasLimit, setGasLimit] = useState(DEFAULTS.gasLimit);
   const [scenario, setScenario] = useState<CalldataScenario>('mixed');
-  const [balBytes, setBalBytes] = useState(0);
+  const [balBytes, setBalBytes] = useState<number | null>(null);
   const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
   const [knobValues, setKnobValues] = useState<Record<string, number>>(() =>
-    typicalKnobValues(spec, landingFork, discoverKnobs(spec, landingFork)),
+    typicalKnobValues(spec, initialFork, discoverKnobs(spec, initialFork)),
   );
 
   const selectFork = (next: string) => {
     setFork(next);
     setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
+    setBalBytes(null);
   };
 
   // Controls update instantly; the expensive part (byte construction +
-  // Snappy over megabytes) trails the sliders by a beat.
+  // Snappy over megabytes) trails the inputs by a beat.
   const state: UserState = useMemo(
     () => ({ fork, activeValidators, gasLimit, scenario, knobValues, balBytes }),
     [fork, activeValidators, gasLimit, scenario, knobValues, balBytes],
@@ -61,12 +85,17 @@ export default function App() {
   const applyPreset = (preset: 'typical' | 'max') => {
     if (preset === 'typical') {
       setKnobValues(typicalKnobValues(spec, fork, knobs));
-      setBalBytes(0);
+      setBalBytes(null);
     } else {
       setKnobValues(worstCaseKnobValues(spec, fork, knobs));
-      setBalBytes(result.elModel !== null ? balWorstCaseBytes(result.elModel, gasLimit) : 0);
+      setBalBytes(result.elModel !== null ? balWorstCaseBytes(result.elModel, gasLimit) : null);
     }
   };
+
+  const envelopeResidual =
+    result.envelope !== null
+      ? result.envelope.sszBytes - result.envelope.breakdown.reduce((a, f) => a + f.bytes, 0n)
+      : 0n;
 
   return (
     <div className="min-h-dvh bg-page font-sans text-ink">
@@ -88,7 +117,7 @@ export default function App() {
             >
               execution-specs
             </a>{' '}
-            <span className="font-mono text-xs">v{elSpec.version}</span>
+            <span className="font-mono text-xs">{elSpec.version}</span>
           </p>
         </header>
 
@@ -105,6 +134,7 @@ export default function App() {
             knobValues={knobValues}
             hasPayload={hasPayload}
             balBytes={balBytes}
+            balUsed={result.balBytesUsed}
             balMax={result.balWorstCase}
             onValidators={setActiveValidators}
             onGasLimit={setGasLimit}
@@ -119,8 +149,32 @@ export default function App() {
             }`}
           >
             <StatTiles result={result} />
-            <CompositionBar result={result} />
-            <BreakdownTable result={result} knobValues={computeState.knobValues} />
+            <CompositionBar
+              title="Beacon block — where the bytes live"
+              rows={result.breakdown}
+              residualLabel="envelope"
+              residualBytes={result.envelopeBytes}
+            />
+            <BreakdownTable
+              rows={blockRows(result, computeState.knobValues)}
+              residualLabel="block envelope (header, signature, offsets)"
+              residualBytes={result.envelopeBytes}
+            />
+            {result.envelope !== null && (
+              <>
+                <CompositionBar
+                  title="Payload envelope — where the bytes live"
+                  rows={result.envelope.breakdown}
+                  residualLabel="wrapper"
+                  residualBytes={envelopeResidual}
+                />
+                <BreakdownTable
+                  rows={envelopeRows(result)}
+                  residualLabel="envelope wrapper (builder fields, signature, offsets)"
+                  residualBytes={envelopeResidual}
+                />
+              </>
+            )}
             <InfoCards spec={spec} fork={computeState.fork} result={result} scenario={scenario} />
           </main>
         </div>

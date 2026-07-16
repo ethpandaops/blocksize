@@ -96,12 +96,25 @@ describe('computeBlockSize', () => {
   });
 
   it('block access lists (EIP-7928) size the gloas envelope', () => {
-    const without = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    const zero = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 0 }));
+    const auto = computeBlockSize(spec, elSpec, stateFor('gloas'));
     const withBal = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 500_000 }));
-    expect(withBal.envelope!.sszBytes - without.envelope!.sszBytes).toBe(500_000n);
-    expect(without.balWorstCase).toBeGreaterThan(1_000_000); // 60M gas / 2100 × 64
+    expect(withBal.envelope!.sszBytes - zero.envelope!.sszBytes).toBe(500_000n);
+    // Unset = automatic per-transaction estimate.
+    expect(auto.balBytesUsed).toBe(auto.payloadPlan!.txCount * 112);
+    // 36M gas / COLD_STORAGE_ACCESS(3000, amsterdam repricing) × 64 bytes
+    expect(zero.balWorstCase).toBe(768_000);
     const bal = withBal.envelope!.breakdown.find((f) => f.name === 'block_access_list');
     expect(bal!.bytes).toBe(500_004n); // content + 4-byte offset
+  });
+
+  it('gloas pairs with amsterdam (upcoming EL fork), not the latest released one', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    expect(result.elModel!.fork.name).toBe('amsterdam');
+    expect(result.elModel!.fork.eips).toContain(7928);
+    // Glamsterdam gas schedule restructuring (GasCosts class) still resolves.
+    expect(result.elModel!.txBaseCost).toBeGreaterThan(0);
+    expect(result.elModel!.floorTokenCost).not.toBeNull();
   });
 
   it('gloas EIP list includes 7928 from the no-hyphen fork comments', () => {

@@ -6,8 +6,8 @@
 
 import { buildAssignment, type NetworkParams } from './constraints';
 import { constructBytes } from './construct';
-import type { CalldataScenario, ElModel } from './el';
-import { elModelFor, planPayload } from './el';
+import type { CalldataScenario, ElModel, PayloadPlan } from './el';
+import { elModelFor, firstConstant, planPayload } from './el';
 import { discoverKnobs, processingLimit, type Knob } from './knobs';
 import type { ConsensusSpec, ElSpec, JsonInt } from './schema';
 import { FAR_FUTURE_EPOCH, toBigInt } from './schema';
@@ -37,8 +37,11 @@ export interface UserState {
   gasLimit: number;
   scenario: CalldataScenario;
   knobValues: Record<string, number>;
-  /** Block access list bytes (EIP-7928), when the fork's payload has one. */
-  balBytes?: number;
+  /**
+   * Block access list bytes (EIP-7928), when the fork's payload has one.
+   * null/undefined = automatic per-transaction estimate.
+   */
+  balBytes?: number | null;
 }
 
 /**
@@ -58,9 +61,20 @@ export function hasBalField(spec: ConsensusSpec, fork: string): boolean {
  * (GAS_COLD_SLOAD, extracted from EELS), each producing one entry.
  */
 export function balWorstCaseBytes(elModel: ElModel, gasLimit: number): number {
-  const coldSload = elModel.fork.constants['GAS_COLD_SLOAD'];
-  if (coldSload === undefined) return 0;
-  return Math.floor(gasLimit / Number(coldSload)) * BAL_BYTES_PER_ENTRY;
+  const coldSload = firstConstant(elModel.fork, ['GAS_COLD_SLOAD', 'COLD_STORAGE_ACCESS'], null);
+  if (coldSload === null) return 0;
+  return Math.floor(gasLimit / coldSload) * BAL_BYTES_PER_ENTRY;
+}
+
+/**
+ * Automatic BAL estimate when the user hasn't set one: every transaction
+ * touches at least its sender and recipient accounts (nonce + balance
+ * changes), ~2 account entries of EIP-7928 encoding each.
+ */
+export const BAL_BYTES_PER_TX = 112;
+
+export function balAutoBytes(plan: PayloadPlan | null): number {
+  return (plan?.txCount ?? 0) * BAL_BYTES_PER_TX;
 }
 
 export interface SidecarInfo {
@@ -102,6 +116,8 @@ export interface BlockSizeResult {
   /** ePBS: the builder's payload envelope, gossiped mid-slot (EIP-7732). */
   envelope: WireMeasure | null;
   balWorstCase: number;
+  /** Effective BAL bytes used (explicit user value or the auto estimate). */
+  balBytesUsed: number;
   sidecars: SidecarInfo[];
   /** Everything the slot puts on gossip: block + envelope + sidecars. */
   slotGossipBytes: bigint;
@@ -168,11 +184,12 @@ export function computeBlockSize(
   const payloadPlan =
     elModel === null ? null : planPayload(elModel, calldataGas, state.scenario, txLimit);
 
+  const balBytes = state.balBytes ?? balAutoBytes(payloadPlan);
   const params: NetworkParams = {
     activeValidators: state.activeValidators,
     knobValues: state.knobValues,
     payloadPlan,
-    balBytes: state.balBytes ?? 0,
+    balBytes,
     // Unbounded lists outside the block body (envelope payload
     // withdrawals, envelope execution requests) fall back to the user's
     // matching request knobs, then to processing-limit constants.
@@ -233,6 +250,7 @@ export function computeBlockSize(
     payloadPlan,
     envelope,
     balWorstCase: elModel !== null ? balWorstCaseBytes(elModel, state.gasLimit) : 0,
+    balBytesUsed: balBytes,
     sidecars,
     slotGossipBytes,
     gossipLimit: numericConfig(spec, 'MAX_PAYLOAD_SIZE'),
