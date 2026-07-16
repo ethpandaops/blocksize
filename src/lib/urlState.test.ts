@@ -10,7 +10,7 @@ const spec = consensusJson as unknown as ConsensusSpec;
 
 describe('url state', () => {
   it('round-trips a customized configuration', () => {
-    const knobs = discoverKnobs(spec, 'gloas');
+    const knobs = discoverKnobs(spec, 'gloas', 300_000_000);
     const knobValues = typicalKnobValues(spec, 'gloas', knobs);
     knobValues['message.body.attestations'] = 2;
     knobValues['message.body.parent_execution_requests.deposits'] = 100;
@@ -29,7 +29,7 @@ describe('url state', () => {
   });
 
   it('defaults produce a bare fork param and decode to defaults', () => {
-    const knobs = discoverKnobs(spec, 'fulu');
+    const knobs = discoverKnobs(spec, 'fulu', DEFAULTS.gasLimit);
     const state: UserState = {
       fork: 'fulu',
       activeValidators: DEFAULTS.activeValidators,

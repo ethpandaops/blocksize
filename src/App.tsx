@@ -94,12 +94,12 @@ export default function App() {
   const [txCount, setTxCount] = useState<number | null>(initial.txCount ?? null);
   const [calldataBytes, setCalldataBytes] = useState<number | null>(initial.calldataBytes ?? null);
   const [preset, setPreset] = useState<'typical' | 'max' | 'custom'>('typical');
-  const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
+  const knobs = useMemo(() => discoverKnobs(spec, fork, gasLimit), [fork, gasLimit]);
   const [knobValues, setKnobValues] = useState<Record<string, number>>(initial.knobValues);
 
   const selectFork = (next: string) => {
     setFork(next);
-    setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
+    setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next, gasLimit)));
     setBalBytes(null);
     setTxCount(null);
     setCalldataBytes(null);

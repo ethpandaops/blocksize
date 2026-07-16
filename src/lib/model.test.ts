@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import consensusJson from '../../spec-data/consensus.json';
 import elJson from '../../spec-data/el.json';
+import { maxDepositRequests } from './el';
 import { computeBlockSize, type UserState } from './model';
 import type { ConsensusSpec, ElSpec } from './schema';
 
@@ -106,6 +107,35 @@ describe('computeBlockSize', () => {
     expect(result.slotGossipBytes).toBeGreaterThan(
       BigInt(result.gossipBytes) + BigInt(result.envelope!.gossipBytes) - 1n,
     );
+  });
+
+  it('gloas deposit requests consume payload gas and clamp to what it pays for', () => {
+    const path = 'message.body.parent_execution_requests.deposits';
+    const none = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    const some = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', { knobValues: { [path]: 1000 } }),
+    );
+    // Deposits eat gas that would otherwise buy calldata.
+    expect(some.payloadPlan!.totalCalldataBytes).toBeLessThan(
+      none.payloadPlan!.totalCalldataBytes,
+    );
+    // A knob value beyond the gas-derived cap (say the gas slider moved
+    // down after deposits were set) sizes the block exactly at the cap.
+    const cap = maxDepositRequests(36_000_000);
+    const capped = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', { knobValues: { [path]: cap } }),
+    );
+    const over = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', { knobValues: { [path]: cap + 5000 } }),
+    );
+    expect(over.sszBytes).toBe(capped.sszBytes);
+    expect(over.envelope!.sszBytes).toBe(capped.envelope!.sszBytes);
   });
 
   it('block access lists (EIP-7928) size the gloas envelope', () => {

@@ -7,7 +7,7 @@
 import { buildAssignment, type NetworkParams } from './constraints';
 import { constructBytes } from './construct';
 import type { CalldataScenario, ElModel, PayloadPlan } from './el';
-import { elModelFor, firstConstant, planPayload } from './el';
+import { GAS_PER_DEPOSIT_REQUEST, elModelFor, firstConstant, planPayload } from './el';
 import { discoverKnobs, processingLimit, type Knob } from './knobs';
 import type { ConsensusSpec, ElSpec, JsonInt } from './schema';
 import { FAR_FUTURE_EPOCH, toBigInt } from './schema';
@@ -23,13 +23,6 @@ import { framedSize, gossipSize, snappyWorstCase } from './snappy';
 const MAINNET_GENESIS_TIME = 1606824023;
 const SECONDS_PER_SLOT = 12;
 const SLOTS_PER_EPOCH = 32;
-
-/**
- * Gas consumed per deposit made through the deposit contract. An
- * empirical contract-execution cost, not a protocol constant: it bounds
- * how many DepositRequests one payload's gas can produce (EIP-6110).
- */
-export const GAS_PER_DEPOSIT_REQUEST = 31500;
 
 export interface UserState {
   fork: string;
@@ -179,7 +172,7 @@ export function computeBlockSize(
   const registry = spec.forks[fork].containers;
   const root = registry['SignedBeaconBlock'];
   const body = registry['BeaconBlockBody'];
-  const knobs = discoverKnobs(spec, fork);
+  const knobs = discoverKnobs(spec, fork, state.gasLimit);
 
   // Pre-ePBS the body carries the execution payload; from gloas the
   // builder gossips it separately as a payload envelope mid-slot.
@@ -193,9 +186,21 @@ export function computeBlockSize(
   const elModel =
     bodyHasPayload || envelopeContainer !== null ? elForkForClFork(spec, elSpec, fork) : null;
 
-  // EIP-6110 deposit requests consume payload gas, shrinking calldata room.
-  const depositKnob = knobs.find((k) => k.group === 'execution_requests' && k.name === 'deposits');
-  const depositCount = depositKnob ? (state.knobValues[depositKnob.path] ?? 0) : 0;
+  // EIP-6110 deposit requests consume payload gas, shrinking calldata
+  // room. The count clamps to the knob's gas-derived cap: a stale knob
+  // value (say the gas slider dropped after deposits were set) must not
+  // put more deposits in the block than the gas can pay for.
+  const depositKnob = knobs.find(
+    (k) => k.name === 'deposits' && k.group !== null && k.group.includes('execution_requests'),
+  );
+  const depositCount =
+    depositKnob === undefined
+      ? 0
+      : Math.min(state.knobValues[depositKnob.path] ?? 0, depositKnob.max);
+  const knobValues =
+    depositKnob === undefined
+      ? state.knobValues
+      : { ...state.knobValues, [depositKnob.path]: depositCount };
   const calldataGas = Math.max(0, state.gasLimit - depositCount * GAS_PER_DEPOSIT_REQUEST);
 
   const txLimit = maxTransactionsPerPayload(spec, fork);
@@ -213,7 +218,7 @@ export function computeBlockSize(
     elModel === null ? null : planPayload(elModel, calldataGas, shape, txLimit, balBytes);
   const params: NetworkParams = {
     activeValidators: state.activeValidators,
-    knobValues: state.knobValues,
+    knobValues,
     payloadPlan,
     balBytes,
     // Unbounded lists outside the block body (envelope payload
@@ -223,7 +228,7 @@ export function computeBlockSize(
       const requestKnob = knobs.find(
         (k) => k.name === field && k.group !== null && k.group.includes('execution_requests'),
       );
-      if (requestKnob !== undefined) return state.knobValues[requestKnob.path] ?? 0;
+      if (requestKnob !== undefined) return knobValues[requestKnob.path] ?? 0;
       return processingLimit(spec, fork, field);
     },
   };

@@ -41,7 +41,7 @@ const DISPOSITIONS: Record<string, string> = {
   'CL:MAX_BYTES_PER_TRANSACTION': 'structural',
   'CL:MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD': 'modeled', // knob cap
   'CL:MAX_DATA_COLUMN_SIDECAR_SIZE': 'modeled', // sidecar cap check
-  'CL:MAX_DEPOSIT_REQUESTS_PER_PAYLOAD': 'modeled', // knob cap
+  'CL:MAX_DEPOSIT_REQUESTS_PER_PAYLOAD': 'structural', // electra/fulu SSZ list bound, read from the schema; gone from gloas (progressive list) where gas is the only bound
   'CL:MAX_EXECUTION_PROOFS_PER_PAYLOAD': 'unmodeled', // eip8025 feature-fork objects
   'CL:MAX_EXTRA_DATA_BYTES': 'structural',
   'CL:MAX_PARTIAL_DATA_COLUMN_SIDECAR_SIZE': 'unmodeled', // eip8045 partial columns

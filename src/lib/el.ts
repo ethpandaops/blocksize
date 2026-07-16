@@ -35,6 +35,23 @@ export interface ElModel {
 /** Rough RLP header + withdrawals allowance inside the EIP-7934 budget. */
 const EL_BLOCK_OVERHEAD_BYTES = 2048;
 
+/**
+ * Cheapest achievable gas cost of one EL-triggered deposit, from the
+ * EIP-6110 security considerations: 15,650 gas of deposit-contract
+ * execution + 6,900 for the value-bearing CALL + ~1,000 of amortized
+ * batching overhead. A contract-execution cost rather than a protocol
+ * constant — but it is the only per-payload bound on deposit requests:
+ * the deposit contract has no dequeue cap (unlike EIP-7002/7251 system
+ * contracts), and gloas drops the CL list limit too (EIP-7688
+ * progressive lists).
+ */
+export const GAS_PER_DEPOSIT_REQUEST = 23_550;
+
+/** Most deposit requests one payload's gas can pay for. */
+export function maxDepositRequests(gasLimit: number): number {
+  return Math.floor(gasLimit / GAS_PER_DEPOSIT_REQUEST);
+}
+
 export function latestElFork(spec: ElSpec): ElFork {
   return spec.forks[spec.forks.length - 1];
 }

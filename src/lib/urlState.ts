@@ -41,7 +41,7 @@ export function encodeState(spec: ConsensusSpec, state: UserState): string {
   if (state.calldataBytes !== null && state.calldataBytes !== undefined) {
     params.set('cal', String(state.calldataBytes));
   }
-  const knobs = discoverKnobs(spec, state.fork);
+  const knobs = discoverKnobs(spec, state.fork, state.gasLimit);
   const defaults = typicalKnobValues(spec, state.fork, knobs);
   for (const knob of knobs) {
     const value = state.knobValues[knob.path] ?? 0;
@@ -64,7 +64,10 @@ export function decodeState(spec: ConsensusSpec, search: string, fallbackFork: s
   const forkParam = params.get('fork');
   const fork = forkParam !== null && spec.forks[forkParam] !== undefined ? forkParam : fallbackFork;
 
-  const knobs = discoverKnobs(spec, fork);
+  // Knob caps depend on the gas limit (deposit requests), so it decodes
+  // before the knobs do.
+  const gasLimit = intParam(params, 'gas') ?? DEFAULTS.gasLimit;
+  const knobs = discoverKnobs(spec, fork, gasLimit);
   const knobValues = typicalKnobValues(spec, fork, knobs);
   for (const knob of knobs) {
     const value = intParam(params, KNOB_PREFIX + shortPath(knob.path));
@@ -75,7 +78,7 @@ export function decodeState(spec: ConsensusSpec, search: string, fallbackFork: s
   return {
     fork,
     activeValidators: intParam(params, 'v') ?? DEFAULTS.activeValidators,
-    gasLimit: intParam(params, 'gas') ?? DEFAULTS.gasLimit,
+    gasLimit,
     scenario: SCENARIOS.includes(scenarioParam as CalldataScenario)
       ? (scenarioParam as CalldataScenario)
       : 'mixed',

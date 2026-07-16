@@ -3,9 +3,12 @@
  * user-adjustable dimensions. New forks get knobs for their new fields
  * with zero code changes; caps come from the SSZ limit or, for
  * progressive (unlimited) lists, from the fork's processing-limit
- * constants (MAX_<FIELD>, latest fork-suffixed variant wins).
+ * constants (MAX_<FIELD>, latest fork-suffixed variant wins). Deposit
+ * requests are the exception: no processing limit bounds them, so their
+ * cap follows from the gas limit.
  */
 
+import { maxDepositRequests } from './el';
 import type { ConsensusSpec, ForkData, SszNode } from './schema';
 import { maxBlobsPerBlock, toBigInt, toNumber } from './schema';
 import type { Registry } from './ssz';
@@ -19,7 +22,7 @@ export interface Knob {
   /** Parent group under body for display, e.g. `execution_requests`. */
   group: string | null;
   max: number;
-  /** True when the SSZ type is unbounded and max came from a processing constant. */
+  /** True when the SSZ type is unbounded and max came from a processing constant (or the gas limit, for deposit requests). */
   progressive: boolean;
 }
 
@@ -88,6 +91,7 @@ function resolveConstant(spec: ConsensusSpec, fork: string, base: string): numbe
 export function discoverKnobs(
   spec: ConsensusSpec,
   fork: string,
+  gasLimit: number,
   rootContainer = 'BeaconBlockBody',
   rootPath = 'message.body',
 ): Knob[] {
@@ -106,6 +110,7 @@ export function discoverKnobs(
       const fieldPath = joinPath(path, name);
       if (resolved.kind === 'list') {
         const limit = toBigInt(resolved.limit);
+        const requestsContext = group !== null && group.includes('execution_requests');
         let max: number;
         if (limit !== null) {
           // For bounded lists the SSZ limit IS the protocol cap: body
@@ -114,8 +119,15 @@ export function discoverKnobs(
         } else {
           // Progressive lists carry no SSZ bound; the cap lives in a
           // processing-limit constant.
-          const requestsContext = group !== null && group.includes('execution_requests');
           max = processingLimit(spec, fork, name, requestsContext) ?? UNBOUNDED_DEFAULT_MAX;
+        }
+        if (requestsContext && name === 'deposits') {
+          // EIP-6110 deposit requests have no per-payload dequeue limit
+          // on the EL; gas is the only bound. From gloas the CL bound is
+          // gone too (progressive list), leaving
+          // MAX_DEPOSIT_REQUESTS_PER_PAYLOAD a dead constant — so the
+          // gas-derived cap replaces it rather than intersecting it.
+          max = limit !== null ? Math.min(max, maxDepositRequests(gasLimit)) : maxDepositRequests(gasLimit);
         }
         if (name === 'blob_kzg_commitments') {
           // Blob throughput is governed by the config blob schedule, not
