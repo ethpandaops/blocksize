@@ -9,6 +9,7 @@ import { InfoCards } from './components/InfoCards';
 import { StatTiles } from './components/StatTiles';
 import { discoverKnobs } from './lib/knobs';
 import { balWorstCaseBytes, computeBlockSize, type UserState } from './lib/model';
+import { useDebouncedValue } from './lib/useDebouncedValue';
 import {
   currentMainnetFork,
   DEFAULTS,
@@ -38,15 +39,24 @@ export default function App() {
     setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
   };
 
-  const state: UserState = { fork, activeValidators, gasLimit, scenario, knobValues, balBytes };
-  const result = useMemo(() => computeBlockSize(spec, elSpec, state), [
-    fork,
-    activeValidators,
-    gasLimit,
-    scenario,
-    knobValues,
-    balBytes,
-  ]);
+  // Controls update instantly; the expensive part (byte construction +
+  // Snappy over megabytes) trails the sliders by a beat.
+  const state: UserState = useMemo(
+    () => ({ fork, activeValidators, gasLimit, scenario, knobValues, balBytes }),
+    [fork, activeValidators, gasLimit, scenario, knobValues, balBytes],
+  );
+  const computeState = useDebouncedValue(state, 150);
+  const result = useMemo(() => computeBlockSize(spec, elSpec, computeState), [computeState]);
+  const stale = computeState !== state;
+
+  const hasPayload = useMemo(() => {
+    const containers = spec.forks[fork].containers;
+    return (
+      containers['BeaconBlockBody'].fields.some(([name]) => name === 'execution_payload') ||
+      containers['SignedExecutionPayloadEnvelope'] !== undefined ||
+      containers['ExecutionPayloadEnvelope'] !== undefined
+    );
+  }, [fork]);
 
   const applyPreset = (preset: 'typical' | 'max') => {
     if (preset === 'typical') {
@@ -93,7 +103,7 @@ export default function App() {
             gasLimit={gasLimit}
             scenario={scenario}
             knobValues={knobValues}
-            hasPayload={result.elModel !== null}
+            hasPayload={hasPayload}
             balBytes={balBytes}
             balMax={result.balWorstCase}
             onValidators={setActiveValidators}
@@ -103,11 +113,15 @@ export default function App() {
             onBal={setBalBytes}
             onPreset={applyPreset}
           />
-          <main className="flex min-w-0 flex-col gap-6">
+          <main
+            className={`flex min-w-0 flex-col gap-6 transition-opacity duration-150 ${
+              stale ? 'opacity-60' : ''
+            }`}
+          >
             <StatTiles result={result} />
             <CompositionBar result={result} />
-            <BreakdownTable result={result} knobValues={knobValues} />
-            <InfoCards spec={spec} fork={fork} result={result} scenario={scenario} />
+            <BreakdownTable result={result} knobValues={computeState.knobValues} />
+            <InfoCards spec={spec} fork={computeState.fork} result={result} scenario={scenario} />
           </main>
         </div>
 
