@@ -49,11 +49,13 @@ export interface UserState {
 }
 
 /**
- * Bytes per worst-case block-access-list entry: a 32-byte storage key
- * plus a 32-byte value (EIP-7928 encoding). An approximation until EELS
- * ships the BAL containers, at which point this becomes extracted.
+ * Fallbacks for forks predating EELS's state-size accounting constants
+ * (STATE_BYTES_PER_STORAGE_SET, STATE_BYTES_PER_NEW_ACCOUNT): a storage
+ * entry is a 32-byte key + 32-byte value; a touched account is ~120B of
+ * encoded changes.
  */
-const BAL_BYTES_PER_ENTRY = 64;
+const FALLBACK_BYTES_PER_STORAGE_SET = 64;
+const FALLBACK_BYTES_PER_ACCOUNT = 120;
 
 /** Does this fork's execution payload carry a block access list? */
 export function hasBalField(spec: ConsensusSpec, fork: string): boolean {
@@ -67,18 +69,27 @@ export function hasBalField(spec: ConsensusSpec, fork: string): boolean {
 export function balWorstCaseBytes(elModel: ElModel, gasLimit: number): number {
   const coldSload = firstConstant(elModel.fork, ['GAS_COLD_SLOAD', 'COLD_STORAGE_ACCESS'], null);
   if (coldSload === null) return 0;
-  return Math.floor(gasLimit / coldSload) * BAL_BYTES_PER_ENTRY;
+  const perEntry = firstConstant(
+    elModel.fork,
+    ['STATE_BYTES_PER_STORAGE_SET'],
+    FALLBACK_BYTES_PER_STORAGE_SET,
+  )!;
+  return Math.floor(gasLimit / coldSload) * perEntry;
 }
 
 /**
  * Automatic BAL estimate when the user hasn't set one: every transaction
- * touches at least its sender and recipient accounts (nonce + balance
- * changes), ~2 account entries of EIP-7928 encoding each.
+ * touches at least its sender and recipient accounts, ~one encoded
+ * account entry's worth of state bytes.
  */
-export const BAL_BYTES_PER_TX = 112;
-
-export function balAutoBytes(plan: PayloadPlan | null): number {
-  return (plan?.txCount ?? 0) * BAL_BYTES_PER_TX;
+export function balAutoBytes(elModel: ElModel | null, plan: PayloadPlan | null): number {
+  if (elModel === null || plan === null) return 0;
+  const perTx = firstConstant(
+    elModel.fork,
+    ['STATE_BYTES_PER_NEW_ACCOUNT'],
+    FALLBACK_BYTES_PER_ACCOUNT,
+  )!;
+  return plan.txCount * perTx;
 }
 
 export interface SidecarInfo {
@@ -88,6 +99,9 @@ export interface SidecarInfo {
   totalBytes: bigint;
   /** Sidecars propagated per block for DAS (columns) vs per blob. */
   perBlock: boolean;
+  /** Per-object gossip size cap from spec constants, if one exists. */
+  gossipCap: number | null;
+  note?: string;
 }
 
 /** One gossip-propagated object, constructed and measured. */
@@ -199,7 +213,7 @@ export function computeBlockSize(
           txLimit,
         );
 
-  const balBytes = state.balBytes ?? balAutoBytes(payloadPlan);
+  const balBytes = state.balBytes ?? balAutoBytes(elModel, payloadPlan);
   const params: NetworkParams = {
     activeValidators: state.activeValidators,
     knobValues: state.knobValues,
@@ -296,16 +310,20 @@ function sidecarInfo(
   knobs: Knob[],
 ): SidecarInfo[] {
   const registry = spec.forks[fork].containers;
+  const constants = spec.forks[fork].constants;
+  const constant = (name: string): number | null => {
+    const value = constants[name];
+    return value !== undefined && typeof value !== 'boolean' ? Number(value) : null;
+  };
+  const out: SidecarInfo[] = [];
+
   // Located by name, not path: gloas moves the commitments list from the
   // body into the builder bid.
   const blobKnob = knobs.find((k) => k.name === 'blob_kzg_commitments');
   const blobCount = blobKnob !== undefined ? (state.knobValues[blobKnob.path] ?? 0) : 0;
-  if (blobCount === 0) return [];
+  const columnCount = numericConfig(spec, 'NUMBER_OF_COLUMNS') ?? constant('NUMBER_OF_COLUMNS');
 
-  const out: SidecarInfo[] = [];
-  const columnCount = numericConfig(spec, 'NUMBER_OF_COLUMNS') ?? columnConstant(spec, fork);
-
-  if (registry['DataColumnSidecar'] !== undefined && columnCount !== null) {
+  if (blobCount > 0 && registry['DataColumnSidecar'] !== undefined && columnCount !== null) {
     // Every list inside a column sidecar (cells, commitments, proofs)
     // scales with blob count.
     const assignment: Assignment = {
@@ -320,8 +338,9 @@ function sidecarInfo(
       bytesEach,
       totalBytes: bytesEach * BigInt(columnCount),
       perBlock: true,
+      gossipCap: constant('MAX_DATA_COLUMN_SIDECAR_SIZE'),
     });
-  } else if (registry['BlobSidecar'] !== undefined) {
+  } else if (blobCount > 0 && registry['BlobSidecar'] !== undefined) {
     const bytesEach = sizeOf(registry['BlobSidecar'], registry, blockAssignment);
     out.push({
       container: 'BlobSidecar',
@@ -329,12 +348,27 @@ function sidecarInfo(
       bytesEach,
       totalBytes: bytesEach * BigInt(blobCount),
       perBlock: false,
+      gossipCap: constant('MAX_PAYLOAD_SIZE') ?? null,
+    });
+  }
+
+  // FOCIL (EIP-7805): each inclusion-list committee member gossips a
+  // SignedInclusionList per slot, capped by a spec constant.
+  const ilCommittee = constant('INCLUSION_LIST_COMMITTEE_SIZE');
+  const ilCap = constant('MAX_SIGNED_INCLUSION_LIST_SIZE');
+  if (registry['SignedInclusionList'] !== undefined && ilCommittee !== null) {
+    const specMax = maxSize(registry['SignedInclusionList'], registry);
+    const bytesEach = ilCap !== null && BigInt(ilCap) < specMax ? BigInt(ilCap) : specMax;
+    out.push({
+      container: 'SignedInclusionList',
+      count: ilCommittee,
+      bytesEach,
+      totalBytes: bytesEach * BigInt(ilCommittee),
+      perBlock: true,
+      gossipCap: ilCap,
+      note: 'FOCIL committee, worst case per member',
     });
   }
   return out;
 }
 
-function columnConstant(spec: ConsensusSpec, fork: string): number | null {
-  const value = spec.forks[fork].constants['NUMBER_OF_COLUMNS'];
-  return value !== undefined && typeof value !== 'boolean' ? Number(value) : null;
-}

@@ -116,15 +116,24 @@ export function InfoCards({
       </Card>
 
       {result.sidecars.length > 0 && (
-        <Card title="Blob data — gossiped separately, not in the block">
+        <Card title="Gossiped alongside the block">
           {result.sidecars.map((s) => (
             <div key={s.container} className="flex flex-col gap-1">
-              <Row label={`${s.container} size`} value={formatBytes(s.bytesEach)} />
               <Row
-                label={s.perBlock ? 'Columns per block' : 'Sidecars per block'}
-                value={formatCount(s.count)}
+                label={`${s.container}${s.note !== undefined ? ` — ${s.note}` : ''}`}
+                value={`${formatCount(s.count)} × ${formatBytes(s.bytesEach)}`}
               />
-              <Row label="Total DA footprint" value={formatBytes(s.totalBytes)} />
+              <Row label="Total" value={formatBytes(s.totalBytes)} />
+              {s.gossipCap !== null && (
+                <Row
+                  label={
+                    s.bytesEach > BigInt(s.gossipCap)
+                      ? '⚠ exceeds per-message gossip cap'
+                      : 'Per-message gossip cap'
+                  }
+                  value={formatBytes(s.gossipCap)}
+                />
+              )}
             </div>
           ))}
         </Card>

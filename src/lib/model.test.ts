@@ -113,8 +113,9 @@ describe('computeBlockSize', () => {
     const auto = computeBlockSize(spec, elSpec, stateFor('gloas'));
     const withBal = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 500_000 }));
     expect(withBal.envelope!.sszBytes - zero.envelope!.sszBytes).toBe(500_000n);
-    // Unset = automatic per-transaction estimate.
-    expect(auto.balBytesUsed).toBe(auto.payloadPlan!.txCount * 112);
+    // Unset = automatic per-transaction estimate, priced by the
+    // extracted STATE_BYTES_PER_NEW_ACCOUNT (120 in amsterdam).
+    expect(auto.balBytesUsed).toBe(auto.payloadPlan!.txCount * 120);
     // 36M gas / COLD_STORAGE_ACCESS(3000, amsterdam repricing) × 64 bytes
     expect(zero.balWorstCase).toBe(768_000);
     const bal = withBal.envelope!.breakdown.find((f) => f.name === 'block_access_list');

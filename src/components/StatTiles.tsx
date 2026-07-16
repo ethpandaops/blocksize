@@ -28,7 +28,8 @@ export function StatTiles({ result }: { result: BlockSizeResult }) {
   const blockOver = limit !== null && result.gossipBytes > limit;
   const envelopeOver =
     limit !== null && result.envelope !== null && result.envelope.gossipBytes > limit;
-  const blobTotal = result.sidecars.reduce((a, s) => a + s.totalBytes, 0n);
+  const blobSidecars = result.sidecars.filter((s) => s.container.includes('Sidecar'));
+  const blobTotal = blobSidecars.reduce((a, s) => a + s.totalBytes, 0n);
 
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -58,8 +59,8 @@ export function StatTiles({ result }: { result: BlockSizeResult }) {
         label="Blob data (DAS)"
         value={formatBytes(blobTotal)}
         sub={
-          result.sidecars.length > 0
-            ? `${result.sidecars[0].count}× ${result.sidecars[0].container}, gossiped separately`
+          blobSidecars.length > 0
+            ? `${blobSidecars[0].count}× ${blobSidecars[0].container}, gossiped separately`
             : 'no blobs at this fork'
         }
       />

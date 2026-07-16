@@ -33,6 +33,17 @@ The design goal: **a new spec release requires zero code changes here.**
    builder requests do today.
 5. The `update-specs` workflow (weekly + manual) re-runs both extractors
    against the latest releases, re-verifies, and opens a PR with the diff.
+6. A constants-coverage ratchet (`src/lib/coverage.test.ts`) enumerates
+   every size-relevant constant in the extracted data and fails when a
+   spec update introduces one without an explicit disposition — a new
+   size cap can't be silently ignored (this class of miss happened once,
+   with EIP-7934's block size cap).
+
+Validation against reality: at mainnet's average 30.3 Mgas, the model's
+typical block is within ~5% of the measured average raw block size
+(204KB, xatu, July 2026). Measured Snappy compression on real blocks
+(2.3×) is stronger than the model's "mixed" calldata scenario, so wire
+sizes err conservative.
 
 Behavior is keyed to extracted *constants*, never to fork names or EIP tables:
 EIP-7623 floor pricing applies because `FLOOR_CALLDATA_COST` exists in the
