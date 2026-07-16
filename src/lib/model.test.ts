@@ -1,0 +1,166 @@
+import { describe, expect, it } from 'vitest';
+import consensusJson from '../../spec-data/consensus.json';
+import elJson from '../../spec-data/el.json';
+import { computeBlockSize, type UserState } from './model';
+import type { ConsensusSpec, ElSpec } from './schema';
+
+const spec = consensusJson as unknown as ConsensusSpec;
+const elSpec = elJson as unknown as ElSpec;
+
+function stateFor(fork: string, overrides: Partial<UserState> = {}): UserState {
+  return {
+    fork,
+    activeValidators: 1_100_000,
+    gasLimit: 36_000_000,
+    scenario: 'mixed',
+    knobValues: {},
+    ...overrides,
+  };
+}
+
+describe('computeBlockSize', () => {
+  it('runs for every fork without error', () => {
+    for (const fork of spec.forkOrder) {
+      const result = computeBlockSize(spec, elSpec, stateFor(fork));
+      expect(result.sszBytes, fork).toBeGreaterThan(0n);
+      expect(BigInt(result.gossipBytes), fork).toBeLessThanOrEqual(
+        BigInt(result.snappyCeiling),
+      );
+    }
+  });
+
+  it('electra empty-block size is in the expected range', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('electra', { gasLimit: 0 }));
+    // Empty body + header + signature: spec minimum is ~1.2KB.
+    expect(result.sszBytes).toBeGreaterThan(1000n);
+    expect(result.sszBytes).toBeLessThan(5000n);
+  });
+
+  it('defaults follow measured mainnet rates, not data-stuffing', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('electra'));
+    const plan = result.payloadPlan!;
+    // 36M gas × 12.6 txs/Mgas and × ~6KB/Mgas of serialized transactions.
+    expect(plan.txCount).toBe(454);
+    expect(plan.totalTxBytes).toBeGreaterThan(180_000);
+    expect(plan.totalTxBytes).toBeLessThan(240_000);
+  });
+
+  it('explicit stuffing recovers the spec-derived worst case', () => {
+    // Post-EIP-7623 all-zero calldata floor: 36M gas / 10 gas per token
+    // ≈ 3.6MB of calldata (matching the old tool's 2.86 MiB per 30M gas).
+    const zeros = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', { scenario: 'zeros', txCount: 1, calldataBytes: 100_000_000 }),
+    );
+    const payloadBytes = zeros.payloadPlan!.totalCalldataBytes;
+    expect(payloadBytes).toBeGreaterThan(3_400_000);
+    expect(payloadBytes).toBeLessThan(3_600_000);
+  });
+
+  it('compression is measured, not estimated: zeros crush, random does not', () => {
+    const zeros = computeBlockSize(spec, elSpec, stateFor('electra', { scenario: 'zeros' }));
+    const random = computeBlockSize(spec, elSpec, stateFor('electra', { scenario: 'random' }));
+    // Same raw bytes either way at typical rates — the scenario decides
+    // only what the calldata looks like on the wire. Envelopes
+    // (signatures, addresses) stay incompressible in both.
+    expect(zeros.sszBytes).toBe(random.sszBytes);
+    expect(zeros.gossipBytes).toBeLessThan(Number(zeros.sszBytes) * 0.65);
+    expect(random.gossipBytes).toBeGreaterThan(Number(random.sszBytes) * 0.9);
+  });
+
+  it('attestations scale with validator count', () => {
+    const knobValues = { 'message.body.attestations': 8 };
+    const small = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', { activeValidators: 500_000, gasLimit: 0, knobValues }),
+    );
+    const large = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', { activeValidators: 2_000_000, gasLimit: 0, knobValues }),
+    );
+    expect(large.sszBytes).toBeGreaterThan(small.sszBytes);
+  });
+
+  it('fulu reports DAS column sidecars, deneb reports blob sidecars', () => {
+    const knobValues = { 'message.body.blob_kzg_commitments': 6 };
+    const fulu = computeBlockSize(spec, elSpec, stateFor('fulu', { knobValues }));
+    const deneb = computeBlockSize(spec, elSpec, stateFor('deneb', { knobValues }));
+    expect(fulu.sidecars[0]?.container).toBe('DataColumnSidecar');
+    expect(deneb.sidecars[0]?.container).toBe('BlobSidecar');
+    // A blob sidecar carries the 128KiB blob plus header and proof.
+    expect(deneb.sidecars[0].bytesEach).toBeGreaterThan(131_072n);
+    expect(deneb.sidecars[0].bytesEach).toBeLessThan(133_000n);
+  });
+
+  it('gloas splits the slot into block and payload envelope (ePBS)', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    // The payload leaves the block...
+    expect(result.breakdown.some((f) => f.name === 'execution_payload')).toBe(false);
+    // ...and ships as its own measured wire object.
+    expect(result.envelope?.container).toBe('SignedExecutionPayloadEnvelope');
+    expect(result.envelope!.gossipBytes).toBeGreaterThan(0);
+    expect(result.payloadPlan).not.toBeNull();
+    expect(result.slotGossipBytes).toBeGreaterThan(
+      BigInt(result.gossipBytes) + BigInt(result.envelope!.gossipBytes) - 1n,
+    );
+  });
+
+  it('block access lists (EIP-7928) size the gloas envelope', () => {
+    const zero = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 0 }));
+    const auto = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    const withBal = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 500_000 }));
+    expect(withBal.envelope!.sszBytes - zero.envelope!.sszBytes).toBe(500_000n);
+    // Unset = automatic per-transaction estimate, priced by the
+    // extracted STATE_BYTES_PER_NEW_ACCOUNT (120 in amsterdam).
+    expect(auto.balBytesUsed).toBe(auto.payloadPlan!.txCount * 120);
+    // 36M gas / COLD_STORAGE_ACCESS(3000, amsterdam repricing) × 64 bytes
+    expect(zero.balWorstCase).toBe(768_000);
+    const bal = withBal.envelope!.breakdown.find((f) => f.name === 'block_access_list');
+    expect(bal!.bytes).toBe(500_004n); // content + 4-byte offset
+  });
+
+  it('EIP-7934 block size cap binds before gas at large limits', () => {
+    // 300M gas of zero-byte calldata would be ~18MB unclamped; the RLP
+    // cap (8 MiB after safety margin, extracted from EELS) must bind.
+    const stuffed = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', {
+        gasLimit: 300_000_000,
+        scenario: 'zeros',
+        txCount: 18,
+        calldataBytes: 100_000_000,
+      }),
+    );
+    expect(stuffed.payloadPlan!.totalTxBytes).toBeLessThanOrEqual(8_388_608);
+    expect(stuffed.payloadPlan!.totalCalldataBytes).toBeGreaterThan(8_000_000);
+    // Pre-osaka forks have no cap: electra stuffing stays gas-bound.
+    const electra = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', {
+        gasLimit: 300_000_000,
+        scenario: 'zeros',
+        txCount: 1,
+        calldataBytes: 100_000_000,
+      }),
+    );
+    expect(electra.payloadPlan!.totalCalldataBytes).toBeGreaterThan(25_000_000);
+  });
+
+  it('gloas pairs with amsterdam (upcoming EL fork), not the latest released one', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    expect(result.elModel!.fork.name).toBe('amsterdam');
+    expect(result.elModel!.fork.eips).toContain(7928);
+    // Glamsterdam gas schedule restructuring (GasCosts class) still resolves.
+    expect(result.elModel!.txBaseCost).toBeGreaterThan(0);
+    expect(result.elModel!.floorTokenCost).not.toBeNull();
+  });
+
+  it('gloas EIP list includes 7928 from the no-hyphen fork comments', () => {
+    expect(spec.forks['gloas'].eips).toContain(7928);
+  });
+});
