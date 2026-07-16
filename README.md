@@ -31,8 +31,12 @@ The design goal: **a new spec release requires zero code changes here.**
    (EIP-7495-style) lists, the fork's processing-limit constants. A new fork's
    new fields appear automatically — as gloas's `payload_attestations` and
    builder requests do today.
-5. The `update-specs` workflow (weekly + manual) re-runs both extractors
-   against the latest releases, re-verifies, and opens a PR with the diff.
+5. The `update-specs` workflow runs nightly (and on demand): it re-runs
+   both extractors against the latest consensus-specs release and EELS
+   HEAD, verifies the engine against the new data, and — when the specs
+   substantively changed — commits the refresh to master and redeploys
+   the site, no human in the loop. If verification fails on real
+   changes, it opens a PR instead.
 6. A constants-coverage ratchet (`src/lib/coverage.test.ts`) enumerates
    every size-relevant constant in the extracted data and fails when a
    spec update introduces one without an explicit disposition — a new
