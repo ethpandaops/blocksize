@@ -135,6 +135,9 @@ export function planPayload(
   gasLimit: number,
   shape: PayloadShape,
   txListLimit: number,
+  /** Non-transaction bytes inside the EL block (the EIP-7928 BAL), which
+   * consume EIP-7934 budget alongside calldata. */
+  reservedBlockBytes = 0,
 ): PayloadPlan {
   const perByte = gasPerByte(model, shape.scenario);
   const txCapacity = Math.floor(gasLimit / model.txBaseCost);
@@ -165,7 +168,10 @@ export function planPayload(
     // EIP-7934: the RLP block size cap binds before gas does once the
     // limit is large enough (e.g. 300M gas of zero-byte calldata).
     const byteBudget =
-      model.maxBlockBytes - txCount * TX_ENVELOPE_BYTES - EL_BLOCK_OVERHEAD_BYTES;
+      model.maxBlockBytes -
+      reservedBlockBytes -
+      txCount * TX_ENVELOPE_BYTES -
+      EL_BLOCK_OVERHEAD_BYTES;
     maxCalldataBytes = Math.min(maxCalldataBytes, Math.max(0, byteBudget));
   }
 
