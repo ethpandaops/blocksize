@@ -82,6 +82,12 @@ export function InfoCards({
               value={formatCount(result.elModel.txMaxGasLimit)}
             />
           )}
+          {result.elModel.maxBlockBytes !== null && (
+            <Row
+              label="RLP block cap (EIP-7934)"
+              value={formatBytes(result.elModel.maxBlockBytes)}
+            />
+          )}
           {result.envelope !== null && (
             <>
               <Row label="Envelope raw SSZ" value={formatBytes(result.envelope.sszBytes)} />

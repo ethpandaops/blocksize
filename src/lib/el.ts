@@ -28,7 +28,12 @@ export interface ElModel {
   floorTokenCost: number | null;
   /** per-transaction gas cap (EIP-7825), or null when uncapped. */
   txMaxGasLimit: number | null;
+  /** RLP block size cap after safety margin (EIP-7934), or null pre-osaka. */
+  maxBlockBytes: number | null;
 }
+
+/** Rough RLP header + withdrawals allowance inside the EIP-7934 budget. */
+const EL_BLOCK_OVERHEAD_BYTES = 2048;
 
 export function latestElFork(spec: ElSpec): ElFork {
   return spec.forks[spec.forks.length - 1];
@@ -61,6 +66,7 @@ export function elModelFor(fork: ElFork): ElModel {
     )!,
     floorTokenCost: firstConstant(fork, ['FLOOR_CALLDATA_COST', 'TX_DATA_TOKEN_FLOOR'], null),
     txMaxGasLimit: firstConstant(fork, ['TX_MAX_GAS_LIMIT'], null),
+    maxBlockBytes: firstConstant(fork, ['MAX_RLP_BLOCK_SIZE'], null),
   };
 }
 
@@ -154,6 +160,13 @@ export function planPayload(
   if (model.txMaxGasLimit !== null) {
     const perTxBytes = Math.floor((model.txMaxGasLimit - model.txBaseCost) / perByte);
     maxCalldataBytes = Math.min(maxCalldataBytes, txCount * perTxBytes);
+  }
+  if (model.maxBlockBytes !== null) {
+    // EIP-7934: the RLP block size cap binds before gas does once the
+    // limit is large enough (e.g. 300M gas of zero-byte calldata).
+    const byteBudget =
+      model.maxBlockBytes - txCount * TX_ENVELOPE_BYTES - EL_BLOCK_OVERHEAD_BYTES;
+    maxCalldataBytes = Math.min(maxCalldataBytes, Math.max(0, byteBudget));
   }
 
   const typicalCalldata = Math.max(

@@ -121,6 +121,35 @@ describe('computeBlockSize', () => {
     expect(bal!.bytes).toBe(500_004n); // content + 4-byte offset
   });
 
+  it('EIP-7934 block size cap binds before gas at large limits', () => {
+    // 300M gas of zero-byte calldata would be ~18MB unclamped; the RLP
+    // cap (8 MiB after safety margin, extracted from EELS) must bind.
+    const stuffed = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', {
+        gasLimit: 300_000_000,
+        scenario: 'zeros',
+        txCount: 18,
+        calldataBytes: 100_000_000,
+      }),
+    );
+    expect(stuffed.payloadPlan!.totalTxBytes).toBeLessThanOrEqual(8_388_608);
+    expect(stuffed.payloadPlan!.totalCalldataBytes).toBeGreaterThan(8_000_000);
+    // Pre-osaka forks have no cap: electra stuffing stays gas-bound.
+    const electra = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', {
+        gasLimit: 300_000_000,
+        scenario: 'zeros',
+        txCount: 1,
+        calldataBytes: 100_000_000,
+      }),
+    );
+    expect(electra.payloadPlan!.totalCalldataBytes).toBeGreaterThan(25_000_000);
+  });
+
   it('gloas pairs with amsterdam (upcoming EL fork), not the latest released one', () => {
     const result = computeBlockSize(spec, elSpec, stateFor('gloas'));
     expect(result.elModel!.fork.name).toBe('amsterdam');

@@ -59,7 +59,7 @@ def main():
         fork_module = importlib.import_module(hardfork.name)
         eips = sorted({int(n) for n in re.findall(r"EIP-?(\d+)", fork_module.__doc__ or "")})
         constants = {}
-        for submodule in ("transactions", "vm.gas"):
+        for submodule in ("transactions", "vm.gas", "fork"):
             try:
                 module = importlib.import_module(f"{hardfork.name}.{submodule}")
             except ModuleNotFoundError:
