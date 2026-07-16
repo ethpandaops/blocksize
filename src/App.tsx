@@ -90,6 +90,7 @@ export default function App() {
   const [gasLimit, setGasLimit] = useState(initial.gasLimit);
   const [scenario, setScenario] = useState<CalldataScenario>(initial.scenario);
   const [balBytes, setBalBytes] = useState<number | null>(initial.balBytes ?? null);
+  const [preset, setPreset] = useState<'typical' | 'max' | 'custom'>('typical');
   const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
   const [knobValues, setKnobValues] = useState<Record<string, number>>(initial.knobValues);
 
@@ -97,6 +98,17 @@ export default function App() {
     setFork(next);
     setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
     setBalBytes(null);
+    setPreset('typical');
+  };
+
+  const editKnobs = (values: Record<string, number>) => {
+    setKnobValues(values);
+    setPreset('custom');
+  };
+
+  const editBal = (bytes: number | null) => {
+    setBalBytes(bytes);
+    setPreset('custom');
   };
 
   // Controls update instantly; the expensive part (byte construction +
@@ -124,14 +136,15 @@ export default function App() {
     );
   }, [fork]);
 
-  const applyPreset = (preset: 'typical' | 'max') => {
-    if (preset === 'typical') {
+  const applyPreset = (next: 'typical' | 'max') => {
+    if (next === 'typical') {
       setKnobValues(typicalKnobValues(spec, fork, knobs));
       setBalBytes(null);
     } else {
       setKnobValues(worstCaseKnobValues(spec, fork, knobs));
       setBalBytes(result.elModel !== null ? balWorstCaseBytes(result.elModel, gasLimit) : null);
     }
+    setPreset(next);
   };
 
   const envelopeResidual =
@@ -179,11 +192,12 @@ export default function App() {
             balBytes={balBytes}
             balUsed={result.balBytesUsed}
             balMax={result.balWorstCase}
+            preset={preset}
             onValidators={setActiveValidators}
             onGasLimit={setGasLimit}
             onScenario={setScenario}
-            onKnobs={setKnobValues}
-            onBal={setBalBytes}
+            onKnobs={editKnobs}
+            onBal={editBal}
             onPreset={applyPreset}
           />
           <main

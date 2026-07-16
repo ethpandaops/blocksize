@@ -52,7 +52,9 @@ export interface PresetDefaults {
 }
 
 export const DEFAULTS: PresetDefaults = {
-  activeValidators: 1_100_000,
+  // Mainnet active_ongoing count, epoch 461839 (July 2026) — post-Electra
+  // consolidations keep shrinking the count while stake grows.
+  activeValidators: 880_000,
   gasLimit: 60_000_000,
 };
 

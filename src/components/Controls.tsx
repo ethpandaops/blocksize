@@ -82,6 +82,7 @@ export function Controls({
   balBytes,
   balUsed,
   balMax,
+  preset,
   onValidators,
   onGasLimit,
   onScenario,
@@ -103,6 +104,7 @@ export function Controls({
   onScenario: (s: CalldataScenario) => void;
   onKnobs: (values: Record<string, number>) => void;
   onBal: (bytes: number | null) => void;
+  preset: 'typical' | 'max' | 'custom';
   onPreset: (preset: 'typical' | 'max') => void;
 }) {
   const groups = new Map<string | null, Knob[]>();
@@ -119,21 +121,21 @@ export function Controls({
       <section className="flex flex-col gap-3">
         <div className="flex items-baseline justify-between">
           <h2 className="text-sm/6 font-semibold">Network</h2>
-          <div className="flex gap-2 text-xs/5">
-            <button
-              type="button"
-              className="rounded-sm border border-hairline px-2 py-0.5 text-ink-2 hover:text-ink"
-              onClick={() => onPreset('typical')}
-            >
-              typical
-            </button>
-            <button
-              type="button"
-              className="rounded-sm border border-hairline px-2 py-0.5 text-ink-2 hover:text-ink"
-              onClick={() => onPreset('max')}
-            >
-              max
-            </button>
+          <div className="flex gap-1 text-xs/5" role="group" aria-label="Preset">
+            {(['typical', 'max'] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => onPreset(p)}
+                className={`rounded-sm border px-2 py-0.5 ${
+                  preset === p
+                    ? 'border-ink bg-ink text-page'
+                    : 'border-hairline text-ink-2 hover:text-ink'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
           </div>
         </div>
         <Field
