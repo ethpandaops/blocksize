@@ -24,10 +24,13 @@ function Tile({
 }
 
 export function StatTiles({ result }: { result: BlockSizeResult }) {
+  // The gossip limit binds on the UNCOMPRESSED payload (compressed size
+  // is malleable, so the spec only derives a snappy-expansion bound
+  // from it).
   const limit = result.gossipLimit;
-  const blockOver = limit !== null && result.gossipBytes > limit;
+  const blockOver = limit !== null && result.sszBytes > BigInt(limit);
   const envelopeOver =
-    limit !== null && result.envelope !== null && result.envelope.gossipBytes > limit;
+    limit !== null && result.envelope !== null && result.envelope.sszBytes > BigInt(limit);
   const blobSidecars = result.sidecars.filter((s) => s.container.includes('Sidecar'));
   const blobTotal = blobSidecars.reduce((a, s) => a + s.totalBytes, 0n);
 
@@ -38,7 +41,7 @@ export function StatTiles({ result }: { result: BlockSizeResult }) {
         value={formatBytes(result.gossipBytes)}
         sub={
           blockOver
-            ? `⚠ exceeds ${formatBytes(limit!)} gossip limit`
+            ? `⚠ raw SSZ ${formatBytes(result.sszBytes)} exceeds ${formatBytes(limit!)} gossip limit`
             : `raw SSZ ${formatBytes(result.sszBytes)}`
         }
         alert={blockOver}
@@ -49,7 +52,7 @@ export function StatTiles({ result }: { result: BlockSizeResult }) {
         sub={
           result.envelope !== null
             ? envelopeOver
-              ? `⚠ exceeds ${formatBytes(limit!)} gossip limit`
+              ? `⚠ raw SSZ ${formatBytes(result.envelope.sszBytes)} exceeds ${formatBytes(limit!)} gossip limit`
               : `raw SSZ ${formatBytes(result.envelope.sszBytes)} · builder, mid-slot`
             : 'payload rides inside the block at this fork'
         }

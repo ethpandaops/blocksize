@@ -199,21 +199,18 @@ export function computeBlockSize(
   const calldataGas = Math.max(0, state.gasLimit - depositCount * GAS_PER_DEPOSIT_REQUEST);
 
   const txLimit = maxTransactionsPerPayload(spec, fork);
+  const shape = {
+    txCount: state.txCount ?? null,
+    calldataBytes: state.calldataBytes ?? null,
+    scenario: state.scenario,
+  };
+  // Two passes: the automatic BAL estimate needs the transaction count,
+  // and the BAL then consumes EIP-7934 block-byte budget that bounds
+  // calldata.
+  const draftPlan = elModel === null ? null : planPayload(elModel, calldataGas, shape, txLimit);
+  const balBytes = state.balBytes ?? balAutoBytes(elModel, draftPlan);
   const payloadPlan =
-    elModel === null
-      ? null
-      : planPayload(
-          elModel,
-          calldataGas,
-          {
-            txCount: state.txCount ?? null,
-            calldataBytes: state.calldataBytes ?? null,
-            scenario: state.scenario,
-          },
-          txLimit,
-        );
-
-  const balBytes = state.balBytes ?? balAutoBytes(elModel, payloadPlan);
+    elModel === null ? null : planPayload(elModel, calldataGas, shape, txLimit, balBytes);
   const params: NetworkParams = {
     activeValidators: state.activeValidators,
     knobValues: state.knobValues,

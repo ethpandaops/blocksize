@@ -137,6 +137,19 @@ describe('computeBlockSize', () => {
     );
     expect(stuffed.payloadPlan!.totalTxBytes).toBeLessThanOrEqual(8_388_608);
     expect(stuffed.payloadPlan!.totalCalldataBytes).toBeGreaterThan(8_000_000);
+    // The BAL lives inside the EL block, so it consumes the same budget.
+    const withBal = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('gloas', {
+        gasLimit: 300_000_000,
+        scenario: 'zeros',
+        txCount: 18,
+        calldataBytes: 100_000_000,
+        balBytes: 6_000_000,
+      }),
+    );
+    expect(withBal.payloadPlan!.totalTxBytes + 6_000_000).toBeLessThanOrEqual(8_388_608);
     // Pre-osaka forks have no cap: electra stuffing stays gas-bound.
     const electra = computeBlockSize(
       spec,
