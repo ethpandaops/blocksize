@@ -16,8 +16,8 @@ on:
       consensus_tag:
         description: 'consensus-specs tag (default: latest release, prereleases included)'
         required: false
-      el_version:
-        description: 'ethereum-execution (EELS) version (default: latest on PyPI)'
+      el_ref:
+        description: 'execution-specs git ref (default: HEAD, which EELS points at the in-development fork)'
         required: false
 
 jobs:
@@ -43,12 +43,14 @@ jobs:
           if [ -z "$TAG" ]; then
             TAG=$(gh api repos/ethereum/consensus-specs/releases --jq '.[0].tag_name')
           fi
-          EL='${{ inputs.el_version }}'
-          if [ -z "$EL" ]; then
-            EL=$(curl -s https://pypi.org/pypi/ethereum-execution/json | jq -r '.info.version')
+          EL_REF='${{ inputs.el_ref }}'
+          if [ -z "$EL_REF" ]; then
+            EL_REF=$(git ls-remote --symref https://github.com/ethereum/execution-specs HEAD | awk '/^ref:/ {sub("refs/heads/","",$2); print $2}')
           fi
+          EL_SHA=$(git ls-remote https://github.com/ethereum/execution-specs "$EL_REF" | cut -c1-8)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "el=$EL" >> "$GITHUB_OUTPUT"
+          echo "el_ref=$EL_REF" >> "$GITHUB_OUTPUT"
+          echo "el=$EL_REF@$EL_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Extract consensus spec data
         run: |
@@ -65,7 +67,7 @@ jobs:
         run: |
           uv venv /tmp/elenv
           uv pip install --python /tmp/elenv/bin/python \
-            'ethereum-execution==${{ steps.versions.outputs.el }}'
+            'git+https://github.com/ethereum/execution-specs@${{ steps.versions.outputs.el_ref }}'
           /tmp/elenv/bin/python extractor/extract_el.py \
             --version '${{ steps.versions.outputs.el }}' --out spec-data/el.json
 
