@@ -22,6 +22,17 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+function balRow(result: BlockSizeResult) {
+  const bal = result.envelope?.breakdown.find((f) => f.name === 'block_access_list');
+  if (bal === undefined) return null;
+  return (
+    <Row
+      label="Block access list (EIP-7928)"
+      value={`${formatBytes(bal.bytes)} (worst case ${formatBytes(result.balWorstCase)})`}
+    />
+  );
+}
+
 export function InfoCards({
   spec,
   fork,
@@ -37,9 +48,22 @@ export function InfoCards({
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {result.elModel !== null && result.payloadPlan !== null ? (
-        <Card title={`Execution payload — EL fork: ${forkLabel(result.elModel.fork.name)}`}>
+        <Card
+          title={
+            result.envelope !== null
+              ? `Execution payload — builder envelope, EL fork: ${forkLabel(result.elModel.fork.name)}`
+              : `Execution payload — EL fork: ${forkLabel(result.elModel.fork.name)}`
+          }
+        >
+          {result.envelope !== null && (
+            <p className="text-xs/5 text-ink-muted">
+              ePBS (EIP-7732): the block carries only the builder's bid; the builder reveals this
+              envelope as its own gossip message mid-slot.
+            </p>
+          )}
           <Row label="Transactions" value={formatCount(result.payloadPlan.txCount)} />
           <Row label="Calldata" value={formatBytes(result.payloadPlan.totalCalldataBytes)} />
+          {balRow(result)}
           <Row
             label={`Gas per calldata byte (${scenario})`}
             value={gasPerByte(result.elModel, scenario).toFixed(1)}
@@ -58,19 +82,23 @@ export function InfoCards({
               value={formatCount(result.elModel.txMaxGasLimit)}
             />
           )}
+          {result.envelope !== null && (
+            <>
+              <Row label="Envelope raw SSZ" value={formatBytes(result.envelope.sszBytes)} />
+              <Row
+                label="Envelope gossip (measured)"
+                value={formatBytes(result.envelope.gossipBytes)}
+              />
+            </>
+          )}
         </Card>
       ) : (
         <Card title="Execution payload">
-          <p>
-            Not part of the beacon block at this fork
-            {result.elModel === null && spec.forks[fork].containers['SignedExecutionPayloadBid']
-              ? ' — ePBS ships the payload separately; the block carries only the builder bid.'
-              : '.'}
-          </p>
+          <p>Not part of the beacon block at this fork.</p>
         </Card>
       )}
 
-      <Card title="Wire sizes">
+      <Card title="Beacon block wire sizes">
         <Row label="Raw SSZ" value={formatBytes(result.sszBytes)} />
         <Row label="Gossip (Snappy, measured)" value={formatBytes(result.gossipBytes)} />
         <Row label="Req/resp (framed, measured)" value={formatBytes(result.framedBytes)} />

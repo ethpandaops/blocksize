@@ -2,9 +2,11 @@
 
 **Live**: https://ethpandaops.github.io/blocksize/
 
-Interactive calculator for Ethereum block sizes across every consensus fork —
-raw SSZ, actual gossip wire size, blob/DAS footprint — derived entirely from
-the spec repositories. Nothing is transcribed by hand.
+Interactive calculator for everything an Ethereum slot puts on the wire,
+across every consensus fork: the beacon block, the ePBS payload envelope
+(with its EIP-7928 block access list), and blob/DAS sidecars — each as raw
+SSZ and measured gossip size. All of it is derived from the spec
+repositories; nothing is transcribed by hand.
 
 ## How it stays correct
 

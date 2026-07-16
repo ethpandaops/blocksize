@@ -8,7 +8,7 @@ import { buildAssignment, type NetworkParams } from './constraints';
 import { constructBytes } from './construct';
 import type { CalldataScenario, ElModel } from './el';
 import { elModelFor, planPayload } from './el';
-import { discoverKnobs, type Knob } from './knobs';
+import { discoverKnobs, processingLimit, type Knob } from './knobs';
 import type { ConsensusSpec, ElSpec, JsonInt } from './schema';
 import { FAR_FUTURE_EPOCH, toBigInt } from './schema';
 import type { Assignment } from './ssz';
@@ -37,6 +37,30 @@ export interface UserState {
   gasLimit: number;
   scenario: CalldataScenario;
   knobValues: Record<string, number>;
+  /** Block access list bytes (EIP-7928), when the fork's payload has one. */
+  balBytes?: number;
+}
+
+/**
+ * Bytes per worst-case block-access-list entry: a 32-byte storage key
+ * plus a 32-byte value (EIP-7928 encoding). An approximation until EELS
+ * ships the BAL containers, at which point this becomes extracted.
+ */
+const BAL_BYTES_PER_ENTRY = 64;
+
+/** Does this fork's execution payload carry a block access list? */
+export function hasBalField(spec: ConsensusSpec, fork: string): boolean {
+  return hasField(spec, fork, 'ExecutionPayload', 'block_access_list');
+}
+
+/**
+ * Worst-case BAL size: every unit of gas spent on cold storage accesses
+ * (GAS_COLD_SLOAD, extracted from EELS), each producing one entry.
+ */
+export function balWorstCaseBytes(elModel: ElModel, gasLimit: number): number {
+  const coldSload = elModel.fork.constants['GAS_COLD_SLOAD'];
+  if (coldSload === undefined) return 0;
+  return Math.floor(gasLimit / Number(coldSload)) * BAL_BYTES_PER_ENTRY;
 }
 
 export interface SidecarInfo {
@@ -46,6 +70,15 @@ export interface SidecarInfo {
   totalBytes: bigint;
   /** Sidecars propagated per block for DAS (columns) vs per blob. */
   perBlock: boolean;
+}
+
+/** One gossip-propagated object, constructed and measured. */
+export interface WireMeasure {
+  container: string;
+  sszBytes: bigint;
+  gossipBytes: number;
+  framedBytes: number;
+  breakdown: { name: string; bytes: bigint }[];
 }
 
 export interface BlockSizeResult {
@@ -66,7 +99,12 @@ export interface BlockSizeResult {
   envelopeBytes: bigint;
   elModel: ElModel | null;
   payloadPlan: ReturnType<typeof planPayload> | null;
+  /** ePBS: the builder's payload envelope, gossiped mid-slot (EIP-7732). */
+  envelope: WireMeasure | null;
+  balWorstCase: number;
   sidecars: SidecarInfo[];
+  /** Everything the slot puts on gossip: block + envelope + sidecars. */
+  slotGossipBytes: bigint;
   /** Gossip limit from config (MAX_PAYLOAD_SIZE), if published. */
   gossipLimit: number | null;
 }
@@ -109,10 +147,17 @@ export function computeBlockSize(
   const body = registry['BeaconBlockBody'];
   const knobs = discoverKnobs(spec, fork);
 
-  // The body carries an execution payload pre-ePBS only; afterwards the
-  // payload ships separately and contributes no bytes to the block.
+  // Pre-ePBS the body carries the execution payload; from gloas the
+  // builder gossips it separately as a payload envelope mid-slot.
   const bodyHasPayload = hasField(spec, fork, 'BeaconBlockBody', 'execution_payload');
-  const elModel = bodyHasPayload ? elForkForClFork(spec, elSpec, fork) : null;
+  const envelopeContainer =
+    registry['SignedExecutionPayloadEnvelope'] !== undefined
+      ? 'SignedExecutionPayloadEnvelope'
+      : registry['ExecutionPayloadEnvelope'] !== undefined
+        ? 'ExecutionPayloadEnvelope'
+        : null;
+  const elModel =
+    bodyHasPayload || envelopeContainer !== null ? elForkForClFork(spec, elSpec, fork) : null;
 
   // EIP-6110 deposit requests consume payload gas, shrinking calldata room.
   const depositKnob = knobs.find((k) => k.group === 'execution_requests' && k.name === 'deposits');
@@ -127,6 +172,17 @@ export function computeBlockSize(
     activeValidators: state.activeValidators,
     knobValues: state.knobValues,
     payloadPlan,
+    balBytes: state.balBytes ?? 0,
+    // Unbounded lists outside the block body (envelope payload
+    // withdrawals, envelope execution requests) fall back to the user's
+    // matching request knobs, then to processing-limit constants.
+    listLimit: (field) => {
+      const requestKnob = knobs.find(
+        (k) => k.name === field && k.group !== null && k.group.includes('execution_requests'),
+      );
+      if (requestKnob !== undefined) return state.knobValues[requestKnob.path] ?? 0;
+      return processingLimit(spec, fork, field);
+    },
   };
   const assignment = buildAssignment(knobs, params);
 
@@ -135,10 +191,34 @@ export function computeBlockSize(
   const gossipBytes = gossipSize(bytes);
   const framedBytes = framedSize(bytes);
 
+  let envelope: WireMeasure | null = null;
+  if (envelopeContainer !== null) {
+    const envelopeRoot = registry[envelopeContainer];
+    const envelopeSsz = sizeOf(envelopeRoot, registry, assignment);
+    const envelopeBytes = constructBytes(envelopeRoot, registry, assignment, state.scenario);
+    const payloadNode = registry['ExecutionPayload'];
+    envelope = {
+      container: envelopeContainer,
+      sszBytes: envelopeSsz,
+      gossipBytes: gossipSize(envelopeBytes),
+      framedBytes: framedSize(envelopeBytes),
+      breakdown:
+        payloadNode !== undefined
+          ? fieldBreakdown(payloadNode, registry, assignment, 'message.payload')
+          : [],
+    };
+  }
+
   // Schema field order — stable across knob changes so UI colors can
   // follow the field, not its current size rank.
   const bodyBreakdown = fieldBreakdown(body, registry, assignment, 'message.body');
   const bodyBytes = bodyBreakdown.reduce((a, f) => a + f.bytes, 0n);
+
+  const sidecars = sidecarInfo(spec, fork, state, assignment, knobs);
+  const slotGossipBytes =
+    BigInt(gossipBytes) +
+    BigInt(envelope?.gossipBytes ?? 0) +
+    sidecars.reduce((a, s) => a + s.totalBytes, 0n);
 
   return {
     knobs,
@@ -151,7 +231,10 @@ export function computeBlockSize(
     envelopeBytes: sszBytes - bodyBytes,
     elModel,
     payloadPlan,
-    sidecars: sidecarInfo(spec, fork, state, assignment, knobs),
+    envelope,
+    balWorstCase: elModel !== null ? balWorstCaseBytes(elModel, state.gasLimit) : 0,
+    sidecars,
+    slotGossipBytes,
     gossipLimit: numericConfig(spec, 'MAX_PAYLOAD_SIZE'),
   };
 }

@@ -82,9 +82,29 @@ describe('computeBlockSize', () => {
     expect(deneb.sidecars[0].bytesEach).toBeLessThan(133_000n);
   });
 
-  it('gloas body has no execution payload (ePBS)', () => {
+  it('gloas splits the slot into block and payload envelope (ePBS)', () => {
     const result = computeBlockSize(spec, elSpec, stateFor('gloas'));
-    expect(result.elModel).toBeNull();
-    expect(result.payloadPlan).toBeNull();
+    // The payload leaves the block...
+    expect(result.breakdown.some((f) => f.name === 'execution_payload')).toBe(false);
+    // ...and ships as its own measured wire object.
+    expect(result.envelope?.container).toBe('SignedExecutionPayloadEnvelope');
+    expect(result.envelope!.gossipBytes).toBeGreaterThan(0);
+    expect(result.payloadPlan).not.toBeNull();
+    expect(result.slotGossipBytes).toBeGreaterThan(
+      BigInt(result.gossipBytes) + BigInt(result.envelope!.gossipBytes) - 1n,
+    );
+  });
+
+  it('block access lists (EIP-7928) size the gloas envelope', () => {
+    const without = computeBlockSize(spec, elSpec, stateFor('gloas'));
+    const withBal = computeBlockSize(spec, elSpec, stateFor('gloas', { balBytes: 500_000 }));
+    expect(withBal.envelope!.sszBytes - without.envelope!.sszBytes).toBe(500_000n);
+    expect(without.balWorstCase).toBeGreaterThan(1_000_000); // 60M gas / 2100 × 64
+    const bal = withBal.envelope!.breakdown.find((f) => f.name === 'block_access_list');
+    expect(bal!.bytes).toBe(500_004n); // content + 4-byte offset
+  });
+
+  it('gloas EIP list includes 7928 from the no-hyphen fork comments', () => {
+    expect(spec.forks['gloas'].eips).toContain(7928);
   });
 });

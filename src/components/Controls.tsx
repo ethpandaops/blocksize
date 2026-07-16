@@ -1,9 +1,6 @@
-import { fieldLabel, formatCount, formatGas } from '../lib/format';
+import { fieldLabel, formatBytes, formatCount, formatGas } from '../lib/format';
 import type { CalldataScenario } from '../lib/el';
 import type { Knob } from '../lib/knobs';
-import { discoverKnobs } from '../lib/knobs';
-import { typicalKnobValues, worstCaseKnobValues } from '../lib/presets';
-import type { ConsensusSpec } from '../lib/schema';
 
 const SCENARIOS: { id: CalldataScenario; label: string; hint: string }[] = [
   { id: 'zeros', label: 'All zeros', hint: 'cheapest per byte, biggest raw payload, compresses away' },
@@ -48,31 +45,35 @@ function Slider({
 }
 
 export function Controls({
-  spec,
-  fork,
   knobs,
   activeValidators,
   gasLimit,
   scenario,
   knobValues,
   hasPayload,
+  balBytes,
+  balMax,
   onValidators,
   onGasLimit,
   onScenario,
   onKnobs,
+  onBal,
+  onPreset,
 }: {
-  spec: ConsensusSpec;
-  fork: string;
   knobs: Knob[];
   activeValidators: number;
   gasLimit: number;
   scenario: CalldataScenario;
   knobValues: Record<string, number>;
   hasPayload: boolean;
+  balBytes: number;
+  balMax: number;
   onValidators: (v: number) => void;
   onGasLimit: (v: number) => void;
   onScenario: (s: CalldataScenario) => void;
   onKnobs: (values: Record<string, number>) => void;
+  onBal: (bytes: number) => void;
+  onPreset: (preset: 'typical' | 'max') => void;
 }) {
   const groups = new Map<string | null, Knob[]>();
   for (const knob of knobs) {
@@ -92,14 +93,14 @@ export function Controls({
             <button
               type="button"
               className="rounded-sm border border-hairline px-2 py-0.5 text-ink-2 hover:text-ink"
-              onClick={() => onKnobs(typicalKnobValues(spec, fork, discoverKnobs(spec, fork)))}
+              onClick={() => onPreset('typical')}
             >
               typical
             </button>
             <button
               type="button"
               className="rounded-sm border border-hairline px-2 py-0.5 text-ink-2 hover:text-ink"
-              onClick={() => onKnobs(worstCaseKnobValues(spec, fork, discoverKnobs(spec, fork)))}
+              onClick={() => onPreset('max')}
             >
               max
             </button>
@@ -145,6 +146,17 @@ export function Controls({
                 ))}
               </div>
             </fieldset>
+            {balMax > 0 && (
+              <Slider
+                label="Block access list (EIP-7928)"
+                value={Math.min(balBytes, balMax)}
+                min={0}
+                max={balMax}
+                step={1024}
+                display={formatBytes(Math.min(balBytes, balMax), 1)}
+                onChange={onBal}
+              />
+            )}
           </>
         )}
       </section>

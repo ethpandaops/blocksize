@@ -48,7 +48,7 @@ def main():
     for hardfork in Hardfork.discover():
         fork_name = hardfork.name.split(".")[-1]
         fork_module = importlib.import_module(hardfork.name)
-        eips = sorted({int(n) for n in re.findall(r"EIP-(\d+)", fork_module.__doc__ or "")})
+        eips = sorted({int(n) for n in re.findall(r"EIP-?(\d+)", fork_module.__doc__ or "")})
         constants = {}
         for submodule in ("transactions", "vm.gas"):
             try:

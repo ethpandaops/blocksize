@@ -8,8 +8,13 @@ import { ForkRail } from './components/ForkRail';
 import { InfoCards } from './components/InfoCards';
 import { StatTiles } from './components/StatTiles';
 import { discoverKnobs } from './lib/knobs';
-import { computeBlockSize, type UserState } from './lib/model';
-import { currentMainnetFork, DEFAULTS, typicalKnobValues } from './lib/presets';
+import { balWorstCaseBytes, computeBlockSize, type UserState } from './lib/model';
+import {
+  currentMainnetFork,
+  DEFAULTS,
+  typicalKnobValues,
+  worstCaseKnobValues,
+} from './lib/presets';
 import type { CalldataScenario } from './lib/el';
 import type { ConsensusSpec, ElSpec } from './lib/schema';
 
@@ -22,6 +27,7 @@ export default function App() {
   const [activeValidators, setActiveValidators] = useState(DEFAULTS.activeValidators);
   const [gasLimit, setGasLimit] = useState(DEFAULTS.gasLimit);
   const [scenario, setScenario] = useState<CalldataScenario>('mixed');
+  const [balBytes, setBalBytes] = useState(0);
   const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
   const [knobValues, setKnobValues] = useState<Record<string, number>>(() =>
     typicalKnobValues(spec, landingFork, discoverKnobs(spec, landingFork)),
@@ -32,14 +38,25 @@ export default function App() {
     setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
   };
 
-  const state: UserState = { fork, activeValidators, gasLimit, scenario, knobValues };
+  const state: UserState = { fork, activeValidators, gasLimit, scenario, knobValues, balBytes };
   const result = useMemo(() => computeBlockSize(spec, elSpec, state), [
     fork,
     activeValidators,
     gasLimit,
     scenario,
     knobValues,
+    balBytes,
   ]);
+
+  const applyPreset = (preset: 'typical' | 'max') => {
+    if (preset === 'typical') {
+      setKnobValues(typicalKnobValues(spec, fork, knobs));
+      setBalBytes(0);
+    } else {
+      setKnobValues(worstCaseKnobValues(spec, fork, knobs));
+      setBalBytes(result.elModel !== null ? balWorstCaseBytes(result.elModel, gasLimit) : 0);
+    }
+  };
 
   return (
     <div className="min-h-dvh bg-page font-sans text-ink">
@@ -71,18 +88,20 @@ export default function App() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-[20rem_1fr]">
           <Controls
-            spec={spec}
-            fork={fork}
             knobs={knobs}
             activeValidators={activeValidators}
             gasLimit={gasLimit}
             scenario={scenario}
             knobValues={knobValues}
             hasPayload={result.elModel !== null}
+            balBytes={balBytes}
+            balMax={result.balWorstCase}
             onValidators={setActiveValidators}
             onGasLimit={setGasLimit}
             onScenario={setScenario}
             onKnobs={setKnobValues}
+            onBal={setBalBytes}
+            onPreset={applyPreset}
           />
           <main className="flex min-w-0 flex-col gap-6">
             <StatTiles result={result} />

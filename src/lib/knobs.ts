@@ -52,8 +52,11 @@ export function processingLimit(
   const upper = fieldName.toUpperCase();
   const singular = upper.endsWith('S') ? upper.slice(0, -1) : upper;
   const plain = `MAX_${upper}`;
+  const perPayload = `MAX_${upper}_PER_PAYLOAD`;
   const requests = `MAX_${singular}_REQUESTS_PER_PAYLOAD`;
-  const candidates = requestsContext ? [requests, plain] : [plain, requests];
+  const candidates = requestsContext
+    ? [requests, plain, perPayload]
+    : [plain, perPayload, requests];
   for (const base of candidates) {
     const value = resolveConstant(spec, fork, base);
     if (value !== null) return value;

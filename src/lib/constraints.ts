@@ -19,8 +19,12 @@ export interface NetworkParams {
   activeValidators: number;
   /** User-set counts for discovered knobs, keyed by knob path. */
   knobValues: Record<string, number>;
-  /** Planned execution payload (null pre-merge / post-ePBS bodies). */
+  /** Planned execution payload (null pre-merge). */
   payloadPlan: PayloadPlan | null;
+  /** Block access list size (EIP-7928), when the payload carries one. */
+  balBytes?: number;
+  /** Last-resort count for unbounded lists not covered by knobs or rules. */
+  listLimit?: (fieldName: string) => number | null;
 }
 
 export const SLOTS_PER_EPOCH = 32;
@@ -82,7 +86,8 @@ export function buildAssignment(knobs: Knob[], params: NetworkParams): Assignmen
         return attestationBits(toBigInt(node.limit), params);
       }
       const limit = toBigInt(node.limit);
-      return limit === null ? 0 : Number(limit);
+      if (limit !== null) return Number(limit);
+      return params.listLimit?.(field) ?? 0;
     },
 
     bitlistBits(path, node) {
@@ -102,6 +107,9 @@ export function buildAssignment(knobs: Knob[], params: NetworkParams): Assignmen
         if (plan === null) return 0;
         const index = elementIndex(path);
         return (plan.calldataPerTx[index] ?? 0) + TX_ENVELOPE_BYTES;
+      }
+      if (field === 'block_access_list') {
+        return params.balBytes ?? 0;
       }
       if (field === 'extra_data') {
         const limit = toBigInt(node.limit);

@@ -150,7 +150,8 @@ def extract_eips(fork_name, specs_root=Path("specs")):
     for candidate in (specs_root / fork_name, specs_root / "_features" / fork_name):
         if candidate.is_dir():
             text = "".join(p.read_text() for p in candidate.rglob("*.md"))
-            return sorted({int(n) for n in re.findall(r"EIP-(\d+)", text)})
+            # Both "EIP-7928" prose and "[New in Gloas:EIP7928]" fork comments.
+            return sorted({int(n) for n in re.findall(r"EIP-?(\d+)", text)})
     return []
 
 
