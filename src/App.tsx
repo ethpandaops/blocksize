@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import consensusJson from '../spec-data/consensus.json';
 import elJson from '../spec-data/el.json';
 import { BreakdownTable, type BreakdownRow } from './components/BreakdownTable';
@@ -16,12 +16,47 @@ import {
   type BlockSizeResult,
   type UserState,
 } from './lib/model';
-import { DEFAULTS, landingFork, typicalKnobValues, worstCaseKnobValues } from './lib/presets';
+import { landingFork, typicalKnobValues, worstCaseKnobValues } from './lib/presets';
 import type { ConsensusSpec, ElSpec } from './lib/schema';
+import { decodeState, encodeState } from './lib/urlState';
 import { useDebouncedValue } from './lib/useDebouncedValue';
 
 const spec = consensusJson as unknown as ConsensusSpec;
 const elSpec = elJson as unknown as ElSpec;
+
+function ShareButton() {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const url = window.location.href;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      ok = true;
+    } catch {
+      // Async clipboard denied (permissions, non-secure context): fall
+      // back to a selection-based copy.
+      const scratch = document.createElement('textarea');
+      scratch.value = url;
+      document.body.appendChild(scratch);
+      scratch.select();
+      ok = document.execCommand('copy');
+      scratch.remove();
+    }
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="ml-auto rounded-sm border border-hairline px-2.5 py-1 text-xs/5 text-ink-2 transition-colors hover:border-ink-muted hover:text-ink"
+    >
+      {copied ? 'Copied!' : 'Share this config'}
+    </button>
+  );
+}
 
 function blockRows(result: BlockSizeResult, knobValues: Record<string, number>): BreakdownRow[] {
   return result.breakdown.map((f) => {
@@ -46,16 +81,17 @@ function envelopeRows(result: BlockSizeResult): BreakdownRow[] {
 }
 
 export default function App() {
-  const initialFork = useMemo(() => landingFork(spec), []);
-  const [fork, setFork] = useState(initialFork);
-  const [activeValidators, setActiveValidators] = useState(DEFAULTS.activeValidators);
-  const [gasLimit, setGasLimit] = useState(DEFAULTS.gasLimit);
-  const [scenario, setScenario] = useState<CalldataScenario>('mixed');
-  const [balBytes, setBalBytes] = useState<number | null>(null);
-  const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
-  const [knobValues, setKnobValues] = useState<Record<string, number>>(() =>
-    typicalKnobValues(spec, initialFork, discoverKnobs(spec, initialFork)),
+  const initial = useMemo(
+    () => decodeState(spec, window.location.search, landingFork(spec)),
+    [],
   );
+  const [fork, setFork] = useState(initial.fork);
+  const [activeValidators, setActiveValidators] = useState(initial.activeValidators);
+  const [gasLimit, setGasLimit] = useState(initial.gasLimit);
+  const [scenario, setScenario] = useState<CalldataScenario>(initial.scenario);
+  const [balBytes, setBalBytes] = useState<number | null>(initial.balBytes ?? null);
+  const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
+  const [knobValues, setKnobValues] = useState<Record<string, number>>(initial.knobValues);
 
   const selectFork = (next: string) => {
     setFork(next);
@@ -72,6 +108,12 @@ export default function App() {
   const computeState = useDebouncedValue(state, 150);
   const result = useMemo(() => computeBlockSize(spec, elSpec, computeState), [computeState]);
   const stale = computeState !== state;
+
+  // Keep the URL linkable: it always reflects the settled configuration.
+  useEffect(() => {
+    const query = encodeState(spec, computeState);
+    window.history.replaceState(null, '', `${window.location.pathname}?${query}`);
+  }, [computeState]);
 
   const hasPayload = useMemo(() => {
     const containers = spec.forks[fork].containers;
@@ -119,6 +161,7 @@ export default function App() {
             </a>{' '}
             <span className="font-mono text-xs">{elSpec.version}</span>
           </p>
+          <ShareButton />
         </header>
 
         <div className="mt-6">
