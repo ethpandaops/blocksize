@@ -12,6 +12,7 @@
  */
 
 import type { CalldataScenario } from './el';
+import { TX_ENVELOPE_BYTES } from './el';
 import type { SszNode } from './schema';
 import type { Assignment, Registry } from './ssz';
 import { isFixedSize, joinPath, resolve, sizeOf } from './ssz';
@@ -108,7 +109,11 @@ export function constructBytes(
       case 'byteList': {
         const length = assignment.byteListBytes(path, n);
         if (fieldName(path) === 'transactions' || path.includes('transactions.')) {
-          fillCalldata(at, length);
+          // A transaction's envelope (signature, addresses, gas fields)
+          // is high-entropy regardless of what the calldata looks like.
+          const envelope = Math.min(TX_ENVELOPE_BYTES, length);
+          fillRandom(at, envelope);
+          fillCalldata(at + envelope, length - envelope);
         } else if (CRYPTO_FIELD.test(fieldName(path))) {
           fillRandom(at, length);
         }

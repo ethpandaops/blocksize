@@ -35,6 +35,12 @@ export function encodeState(spec: ConsensusSpec, state: UserState): string {
   if (state.balBytes !== null && state.balBytes !== undefined) {
     params.set('bal', String(state.balBytes));
   }
+  if (state.txCount !== null && state.txCount !== undefined) {
+    params.set('tx', String(state.txCount));
+  }
+  if (state.calldataBytes !== null && state.calldataBytes !== undefined) {
+    params.set('cal', String(state.calldataBytes));
+  }
   const knobs = discoverKnobs(spec, state.fork);
   const defaults = typicalKnobValues(spec, state.fork, knobs);
   for (const knob of knobs) {
@@ -74,6 +80,8 @@ export function decodeState(spec: ConsensusSpec, search: string, fallbackFork: s
       ? (scenarioParam as CalldataScenario)
       : 'mixed',
     balBytes: intParam(params, 'bal'),
+    txCount: intParam(params, 'tx'),
+    calldataBytes: intParam(params, 'cal'),
     knobValues,
   };
 }

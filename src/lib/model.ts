@@ -37,6 +37,10 @@ export interface UserState {
   gasLimit: number;
   scenario: CalldataScenario;
   knobValues: Record<string, number>;
+  /** Explicit transaction count; null/undefined = typical-mainnet rate. */
+  txCount?: number | null;
+  /** Explicit total calldata bytes; null/undefined = typical-mainnet rate. */
+  calldataBytes?: number | null;
   /**
    * Block access list bytes (EIP-7928), when the fork's payload has one.
    * null/undefined = automatic per-transaction estimate.
@@ -182,7 +186,18 @@ export function computeBlockSize(
 
   const txLimit = maxTransactionsPerPayload(spec, fork);
   const payloadPlan =
-    elModel === null ? null : planPayload(elModel, calldataGas, state.scenario, txLimit);
+    elModel === null
+      ? null
+      : planPayload(
+          elModel,
+          calldataGas,
+          {
+            txCount: state.txCount ?? null,
+            calldataBytes: state.calldataBytes ?? null,
+            scenario: state.scenario,
+          },
+          txLimit,
+        );
 
   const balBytes = state.balBytes ?? balAutoBytes(payloadPlan);
   const params: NetworkParams = {

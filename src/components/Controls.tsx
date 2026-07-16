@@ -82,12 +82,20 @@ export function Controls({
   balBytes,
   balUsed,
   balMax,
+  txCount,
+  txUsed,
+  txMax,
+  calldataBytes,
+  calldataUsed,
+  calldataMax,
   preset,
   onValidators,
   onGasLimit,
   onScenario,
   onKnobs,
   onBal,
+  onTxCount,
+  onCalldata,
   onPreset,
 }: {
   knobs: Knob[];
@@ -99,11 +107,19 @@ export function Controls({
   balBytes: number | null;
   balUsed: number;
   balMax: number;
+  txCount: number | null;
+  txUsed: number;
+  txMax: number;
+  calldataBytes: number | null;
+  calldataUsed: number;
+  calldataMax: number;
   onValidators: (v: number) => void;
   onGasLimit: (v: number) => void;
   onScenario: (s: CalldataScenario) => void;
   onKnobs: (values: Record<string, number>) => void;
   onBal: (bytes: number | null) => void;
+  onTxCount: (count: number | null) => void;
+  onCalldata: (bytes: number | null) => void;
   preset: 'typical' | 'max' | 'custom';
   onPreset: (preset: 'typical' | 'max') => void;
 }) {
@@ -156,6 +172,25 @@ export function Controls({
               step={5}
               unit="M"
               onChange={(v) => onGasLimit(v * 1_000_000)}
+            />
+            <Field
+              label="Transactions"
+              value={Math.min(txUsed, txMax)}
+              min={0}
+              max={txMax}
+              step={1}
+              auto={txCount === null}
+              onChange={onTxCount}
+            />
+            <Field
+              label="Calldata"
+              value={Math.round(Math.min(calldataUsed, calldataMax) / 1024)}
+              min={0}
+              max={Math.max(1, Math.round(calldataMax / 1024))}
+              step={16}
+              unit="KiB"
+              auto={calldataBytes === null}
+              onChange={(kib) => onCalldata(kib * 1024)}
             />
             <fieldset>
               <legend className="text-sm/6 text-ink-2">Calldata content</legend>

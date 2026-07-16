@@ -89,44 +89,105 @@ export function gasPerByte(model: ElModel, scenario: CalldataScenario): number {
   return tokens * perToken;
 }
 
+/**
+ * Typical-mainnet payload rates, measured from xatu canonical beacon
+ * blocks (7 days to 2026-07-16, 50,139 blocks: avg 381 txs and 182,325
+ * serialized tx bytes per 30.3M gas used). Empirical by nature — the
+ * transaction mix is user behavior, not protocol — and expressed per
+ * million gas so they scale with the gas limit.
+ */
+export const TYPICAL_TXS_PER_MGAS = 12.6;
+export const TYPICAL_TX_BYTES_PER_MGAS = 6015;
+
 export interface PayloadPlan {
   txCount: number;
   /** Calldata bytes for each transaction (remainder spread over the first txs). */
   calldataPerTx: number[];
   totalCalldataBytes: number;
   totalTxBytes: number;
+  /** Gas-capacity ceilings for the current configuration, for UI ranges. */
+  maxTxCount: number;
+  maxCalldataBytes: number;
+}
+
+export interface PayloadShape {
+  /** Explicit transaction count; null = typical-mainnet rate. */
+  txCount: number | null;
+  /** Explicit total calldata bytes; null = typical-mainnet rate. */
+  calldataBytes: number | null;
+  scenario: CalldataScenario;
 }
 
 /**
- * Plan a data-stuffing payload: as many calldata bytes as the gas limit
- * allows, split into transactions honoring the per-tx gas cap.
+ * Plan the execution payload: how many transactions, carrying how much
+ * calldata. Defaults follow measured mainnet rates; explicit values are
+ * clamped to what the gas limit can actually pay for (intrinsic cost per
+ * transaction, floor-priced calldata, per-tx gas cap).
  */
 export function planPayload(
   model: ElModel,
   gasLimit: number,
-  scenario: CalldataScenario,
-  maxTxCount: number,
+  shape: PayloadShape,
+  txListLimit: number,
 ): PayloadPlan {
-  const perByte = gasPerByte(model, scenario);
-  const txGas = Math.min(model.txMaxGasLimit ?? gasLimit, gasLimit);
-  if (txGas <= model.txBaseCost) {
-    return { txCount: 0, calldataPerTx: [], totalCalldataBytes: 0, totalTxBytes: 0 };
+  const perByte = gasPerByte(model, shape.scenario);
+  const txCapacity = Math.floor(gasLimit / model.txBaseCost);
+  const maxTxCount = Math.min(txCapacity, txListLimit);
+  if (maxTxCount === 0) {
+    return {
+      txCount: 0,
+      calldataPerTx: [],
+      totalCalldataBytes: 0,
+      totalTxBytes: 0,
+      maxTxCount: 0,
+      maxCalldataBytes: 0,
+    };
   }
-  let txCount = Math.max(1, Math.floor(gasLimit / txGas));
-  txCount = Math.min(txCount, maxTxCount);
 
-  const bytesPerFullTx = Math.floor((txGas - model.txBaseCost) / perByte);
-  const remainderGas = gasLimit - txCount * txGas;
-  const calldataPerTx = new Array<number>(txCount).fill(bytesPerFullTx);
-  if (remainderGas > model.txBaseCost && txCount < maxTxCount) {
-    calldataPerTx.push(Math.floor((remainderGas - model.txBaseCost) / perByte));
-    txCount += 1;
+  const typicalTxs = Math.round((gasLimit / 1_000_000) * TYPICAL_TXS_PER_MGAS);
+  const txCount = Math.min(maxTxCount, Math.max(1, shape.txCount ?? typicalTxs));
+
+  // Gas left after intrinsic costs buys calldata at the floor price; the
+  // per-tx gas cap bounds how much any one transaction can carry.
+  const calldataGas = gasLimit - txCount * model.txBaseCost;
+  let maxCalldataBytes = Math.max(0, Math.floor(calldataGas / perByte));
+  if (model.txMaxGasLimit !== null) {
+    const perTxBytes = Math.floor((model.txMaxGasLimit - model.txBaseCost) / perByte);
+    maxCalldataBytes = Math.min(maxCalldataBytes, txCount * perTxBytes);
   }
-  const totalCalldataBytes = calldataPerTx.reduce((a, b) => a + b, 0);
+
+  const typicalCalldata = Math.max(
+    0,
+    Math.round((gasLimit / 1_000_000) * TYPICAL_TX_BYTES_PER_MGAS - txCount * TX_ENVELOPE_BYTES),
+  );
+  const totalCalldataBytes = Math.min(
+    maxCalldataBytes,
+    Math.max(0, shape.calldataBytes ?? typicalCalldata),
+  );
+
+  const base = Math.floor(totalCalldataBytes / txCount);
+  const remainder = totalCalldataBytes - base * txCount;
+  const calldataPerTx = new Array<number>(txCount).fill(base);
+  for (let i = 0; i < remainder; i++) calldataPerTx[i] += 1;
+
   return {
     txCount,
     calldataPerTx,
     totalCalldataBytes,
     totalTxBytes: totalCalldataBytes + txCount * TX_ENVELOPE_BYTES,
+    maxTxCount,
+    maxCalldataBytes,
   };
+}
+
+/** The data-stuffing worst case: fewest envelopes, every byte the gas can buy. */
+export function stuffedPayloadShape(
+  model: ElModel,
+  gasLimit: number,
+  scenario: CalldataScenario,
+): { txCount: number; calldataBytes: number } {
+  const txGas = Math.min(model.txMaxGasLimit ?? gasLimit, gasLimit);
+  const txCount = Math.max(1, Math.ceil(gasLimit / Math.max(txGas, 1)));
+  const plan = planPayload(model, gasLimit, { txCount, calldataBytes: null, scenario }, 1 << 20);
+  return { txCount, calldataBytes: plan.maxCalldataBytes };
 }

@@ -36,10 +36,23 @@ describe('computeBlockSize', () => {
     expect(result.sszBytes).toBeLessThan(5000n);
   });
 
-  it('gas limit drives execution payload size at spec-derived rates', () => {
-    const zeros = computeBlockSize(spec, elSpec, stateFor('electra', { scenario: 'zeros' }));
+  it('defaults follow measured mainnet rates, not data-stuffing', () => {
+    const result = computeBlockSize(spec, elSpec, stateFor('electra'));
+    const plan = result.payloadPlan!;
+    // 36M gas × 12.6 txs/Mgas and × ~6KB/Mgas of serialized transactions.
+    expect(plan.txCount).toBe(454);
+    expect(plan.totalTxBytes).toBeGreaterThan(180_000);
+    expect(plan.totalTxBytes).toBeLessThan(240_000);
+  });
+
+  it('explicit stuffing recovers the spec-derived worst case', () => {
     // Post-EIP-7623 all-zero calldata floor: 36M gas / 10 gas per token
     // ≈ 3.6MB of calldata (matching the old tool's 2.86 MiB per 30M gas).
+    const zeros = computeBlockSize(
+      spec,
+      elSpec,
+      stateFor('electra', { scenario: 'zeros', txCount: 1, calldataBytes: 100_000_000 }),
+    );
     const payloadBytes = zeros.payloadPlan!.totalCalldataBytes;
     expect(payloadBytes).toBeGreaterThan(3_400_000);
     expect(payloadBytes).toBeLessThan(3_600_000);
@@ -48,12 +61,12 @@ describe('computeBlockSize', () => {
   it('compression is measured, not estimated: zeros crush, random does not', () => {
     const zeros = computeBlockSize(spec, elSpec, stateFor('electra', { scenario: 'zeros' }));
     const random = computeBlockSize(spec, elSpec, stateFor('electra', { scenario: 'random' }));
-    // Cheaper zero bytes buy more raw payload per gas (10 vs 40 gas/byte)...
-    expect(zeros.sszBytes).toBeGreaterThan(random.sszBytes * 3n);
-    // ...but Snappy erases nearly all of it on the wire, while random
-    // calldata stays essentially incompressible.
-    expect(zeros.gossipBytes).toBeLessThan(Number(zeros.sszBytes) / 10);
-    expect(random.gossipBytes).toBeGreaterThan(Number(random.sszBytes) * 0.95);
+    // Same raw bytes either way at typical rates — the scenario decides
+    // only what the calldata looks like on the wire. Envelopes
+    // (signatures, addresses) stay incompressible in both.
+    expect(zeros.sszBytes).toBe(random.sszBytes);
+    expect(zeros.gossipBytes).toBeLessThan(Number(zeros.sszBytes) * 0.65);
+    expect(random.gossipBytes).toBeGreaterThan(Number(random.sszBytes) * 0.9);
   });
 
   it('attestations scale with validator count', () => {

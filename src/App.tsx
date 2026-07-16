@@ -8,6 +8,7 @@ import { ForkRail } from './components/ForkRail';
 import { InfoCards } from './components/InfoCards';
 import { StatTiles } from './components/StatTiles';
 import type { CalldataScenario } from './lib/el';
+import { stuffedPayloadShape } from './lib/el';
 import { formatCount } from './lib/format';
 import { discoverKnobs } from './lib/knobs';
 import {
@@ -90,6 +91,8 @@ export default function App() {
   const [gasLimit, setGasLimit] = useState(initial.gasLimit);
   const [scenario, setScenario] = useState<CalldataScenario>(initial.scenario);
   const [balBytes, setBalBytes] = useState<number | null>(initial.balBytes ?? null);
+  const [txCount, setTxCount] = useState<number | null>(initial.txCount ?? null);
+  const [calldataBytes, setCalldataBytes] = useState<number | null>(initial.calldataBytes ?? null);
   const [preset, setPreset] = useState<'typical' | 'max' | 'custom'>('typical');
   const knobs = useMemo(() => discoverKnobs(spec, fork), [fork]);
   const [knobValues, setKnobValues] = useState<Record<string, number>>(initial.knobValues);
@@ -98,24 +101,23 @@ export default function App() {
     setFork(next);
     setKnobValues(typicalKnobValues(spec, next, discoverKnobs(spec, next)));
     setBalBytes(null);
+    setTxCount(null);
+    setCalldataBytes(null);
     setPreset('typical');
   };
 
-  const editKnobs = (values: Record<string, number>) => {
-    setKnobValues(values);
-    setPreset('custom');
-  };
-
-  const editBal = (bytes: number | null) => {
-    setBalBytes(bytes);
-    setPreset('custom');
+  const custom = <T,>(setter: (v: T) => void) => {
+    return (value: T) => {
+      setter(value);
+      setPreset('custom');
+    };
   };
 
   // Controls update instantly; the expensive part (byte construction +
   // Snappy over megabytes) trails the inputs by a beat.
   const state: UserState = useMemo(
-    () => ({ fork, activeValidators, gasLimit, scenario, knobValues, balBytes }),
-    [fork, activeValidators, gasLimit, scenario, knobValues, balBytes],
+    () => ({ fork, activeValidators, gasLimit, scenario, knobValues, balBytes, txCount, calldataBytes }),
+    [fork, activeValidators, gasLimit, scenario, knobValues, balBytes, txCount, calldataBytes],
   );
   const computeState = useDebouncedValue(state, 150);
   const result = useMemo(() => computeBlockSize(spec, elSpec, computeState), [computeState]);
@@ -140,9 +142,16 @@ export default function App() {
     if (next === 'typical') {
       setKnobValues(typicalKnobValues(spec, fork, knobs));
       setBalBytes(null);
+      setTxCount(null);
+      setCalldataBytes(null);
     } else {
       setKnobValues(worstCaseKnobValues(spec, fork, knobs));
-      setBalBytes(result.elModel !== null ? balWorstCaseBytes(result.elModel, gasLimit) : null);
+      if (result.elModel !== null) {
+        const stuffed = stuffedPayloadShape(result.elModel, gasLimit, scenario);
+        setTxCount(stuffed.txCount);
+        setCalldataBytes(stuffed.calldataBytes);
+        setBalBytes(balWorstCaseBytes(result.elModel, gasLimit));
+      }
     }
     setPreset(next);
   };
@@ -192,12 +201,20 @@ export default function App() {
             balBytes={balBytes}
             balUsed={result.balBytesUsed}
             balMax={result.balWorstCase}
+            txCount={txCount}
+            txUsed={result.payloadPlan?.txCount ?? 0}
+            txMax={result.payloadPlan?.maxTxCount ?? 0}
+            calldataBytes={calldataBytes}
+            calldataUsed={result.payloadPlan?.totalCalldataBytes ?? 0}
+            calldataMax={result.payloadPlan?.maxCalldataBytes ?? 0}
             preset={preset}
             onValidators={setActiveValidators}
             onGasLimit={setGasLimit}
             onScenario={setScenario}
-            onKnobs={editKnobs}
-            onBal={editBal}
+            onKnobs={custom(setKnobValues)}
+            onBal={custom(setBalBytes)}
+            onTxCount={custom(setTxCount)}
+            onCalldata={custom(setCalldataBytes)}
             onPreset={applyPreset}
           />
           <main

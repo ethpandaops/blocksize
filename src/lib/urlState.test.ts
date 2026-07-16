@@ -20,6 +20,8 @@ describe('url state', () => {
       gasLimit: 300_000_000,
       scenario: 'zeros',
       balBytes: 123_904,
+      txCount: 42,
+      calldataBytes: 1_000_000,
       knobValues,
     };
     const decoded = decodeState(spec, encodeState(spec, state), landingFork(spec));
@@ -34,6 +36,8 @@ describe('url state', () => {
       gasLimit: DEFAULTS.gasLimit,
       scenario: 'mixed',
       balBytes: null,
+      txCount: null,
+      calldataBytes: null,
       knobValues: typicalKnobValues(spec, 'fulu', knobs),
     };
     const encoded = encodeState(spec, state);
