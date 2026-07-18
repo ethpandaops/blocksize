@@ -3174,6 +3174,7 @@
     "TX_DATA_TOKEN_STANDARD": 4,
     "TX_MAX_GAS_LIMIT": 16777216,
     "TX_VALUE_COST": 4244,
+    "TYPE_CHECKING": 0,
     "VERY_LOW": 3,
     "WARM_ACCESS": 100,
     "ZERO": 0
@@ -3203,5 +3204,5 @@
   }
  ],
  "source": "ethereum/execution-specs",
- "version": "forks/amsterdam@56e615e6"
+ "version": "forks/amsterdam@2119b382"
 }
