@@ -3165,7 +3165,6 @@
     "STORAGE_WRITE": 10000,
     "SYSTEM_MAX_SSTORES_PER_CALL": 16,
     "SYSTEM_TRANSACTION_GAS": 30000000,
-    "TRANSFER_LOG_COST": 1756,
     "TX_ACCESS_LIST_ADDRESS": 3000,
     "TX_ACCESS_LIST_STORAGE_KEY": 3000,
     "TX_BASE": 12000,
@@ -3173,7 +3172,7 @@
     "TX_DATA_TOKEN_FLOOR": 16,
     "TX_DATA_TOKEN_STANDARD": 4,
     "TX_MAX_GAS_LIMIT": 16777216,
-    "TX_VALUE_COST": 4244,
+    "TX_VALUE_COST": 6000,
     "TYPE_CHECKING": 0,
     "VERY_LOW": 3,
     "WARM_ACCESS": 100,
@@ -3204,5 +3203,5 @@
   }
  ],
  "source": "ethereum/execution-specs",
- "version": "forks/amsterdam@2119b382"
+ "version": "forks/amsterdam@af137475"
 }
