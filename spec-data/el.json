@@ -3165,8 +3165,8 @@
     "STORAGE_WRITE": 10000,
     "SYSTEM_MAX_SSTORES_PER_CALL": 16,
     "SYSTEM_TRANSACTION_GAS": 30000000,
-    "TX_ACCESS_LIST_ADDRESS": 3000,
-    "TX_ACCESS_LIST_STORAGE_KEY": 3000,
+    "TX_ACCESS_LIST_ADDRESS": 2900,
+    "TX_ACCESS_LIST_STORAGE_KEY": 2900,
     "TX_BASE": 12000,
     "TX_CREATE": 32000,
     "TX_DATA_TOKEN_FLOOR": 16,
@@ -3203,5 +3203,5 @@
   }
  ],
  "source": "ethereum/execution-specs",
- "version": "forks/amsterdam@0da43875"
+ "version": "forks/amsterdam@9d6e6f83"
 }
